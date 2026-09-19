@@ -66,6 +66,7 @@ export function Cron() {
       setSelectedJobHistory(allRuns.slice(0, 5));
     } catch (err) {
       console.error('Failed to load cron jobs:', err);
+      showToast(`Error: failed to load cron jobs (${err})`);
     }
   };
 
@@ -91,18 +92,26 @@ export function Cron() {
   };
 
   const handleToggle = async (id: string, enabled: boolean) => {
-    await cronToggle(id, enabled);
-    setJobs((prev) =>
-      prev.map((j) => (j.id === id ? { ...j, enabled } : j))
-    );
-    showToast(`${enabled ? 'Enabled' : 'Disabled'} job`);
+    try {
+      await cronToggle(id, enabled);
+      setJobs((prev) =>
+        prev.map((j) => (j.id === id ? { ...j, enabled } : j))
+      );
+      showToast(`${enabled ? 'Enabled' : 'Disabled'} job`);
+    } catch (err) {
+      showToast(`Error: failed to update job (${err})`);
+    }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    const ok = await cronDelete(id);
-    if (ok) {
-      showToast(`Deleted job "${name}"`);
-      loadJobs();
+    try {
+      const ok = await cronDelete(id);
+      if (ok) {
+        showToast(`Deleted job "${name}"`);
+        loadJobs();
+      }
+    } catch (err) {
+      showToast(`Error: failed to delete job (${err})`);
     }
   };
 
@@ -113,6 +122,7 @@ export function Cron() {
       loadJobs();
     } catch (err) {
       console.error('Failed to run job now:', err);
+      showToast(`Error: failed to run job (${err})`);
     }
   };
 

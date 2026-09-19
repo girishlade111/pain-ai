@@ -3,11 +3,16 @@ import { useAppStore } from '../store';
 import { contextCompress } from '../lib/memory_cron';
 
 export function FooterBar() {
-  const { mode, toggleMode, memoryNudge, setMemoryNudge, tokenUsage, setTokenUsage, setActiveTab } = useAppStore();
+  const { mode, toggleMode, memoryNudge, setMemoryNudge, tokenUsage, setTokenUsage, setActiveTab, messages } = useAppStore();
 
   const handleCompress = async () => {
+    // Phase 2: compress the live thread, never dummy text. Empty thread → noop.
+    if (messages.length === 0) return;
     try {
-      const res = await contextCompress('dummy messages text for tokens compression', tokenUsage.limit, true);
+      const payload = JSON.stringify(
+        messages.map((m) => ({ role: m.role, content: `${m.headline || ''}\n${m.body}` }))
+      );
+      const res = await contextCompress(payload, tokenUsage.limit, true);
       if (res.compressed) {
         setTokenUsage({
           used: res.compressed_tokens,

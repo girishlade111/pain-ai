@@ -197,20 +197,16 @@ def transcribe(wav_path: str, model_size: Optional[str] = None) -> Dict[str, Any
         text, lang, ms = fw_res
         return {"ok": True, "text": text, "lang": lang, "ms": ms, "engine": f"faster-whisper-{preferred_device}"}
 
-    # Step 5: Fallback mock / offline transcription for development/test environments
-    # Inspects audio duration to simulate transcription timing
-    try:
-        with wave.open(str(path), "rb") as wf:
-            duration_ms = int((wf.getnframes() / wf.getframerate()) * 1000)
-    except Exception:
-        duration_ms = 500
-
+    # Step 5: No model available. Phase 2: explicit failure, never a canned
+    # transcript. A fabricated transcript would enter the prompt as user input.
     return {
-        "ok": True,
-        "text": "Inspect system status and run security verification.",
+        "ok": False,
+        "text": "",
         "lang": "en",
-        "ms": max(50, int(duration_ms * 0.2)),
-        "engine": "offline_fallback"
+        "ms": 0,
+        "engine": "unavailable",
+        "code": "STT_UNAVAILABLE",
+        "error": "No speech-to-text model available (faster-whisper/whisper.cpp weights missing and offline transcription disabled).",
     }
 
 

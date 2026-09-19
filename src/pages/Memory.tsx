@@ -47,6 +47,7 @@ export function Memory() {
       setUserDoc(u);
     } catch (err) {
       console.error('Failed to load memory documents:', err);
+      showToast(`Error: memory unavailable (${err})`);
     }
   };
 
@@ -108,14 +109,22 @@ export function Memory() {
   };
 
   const handleApproveDraft = async (id: string) => {
-    await learnDraftApprove(id);
-    showToast('Learned skill approved and added to active skills');
+    try {
+      await learnDraftApprove(id);
+      showToast('Learned skill approved and added to active skills');
+    } catch (err) {
+      showToast(`Error: draft approval unavailable (${err})`);
+    }
     loadDrafts();
   };
 
   const handleRejectDraft = async (id: string) => {
-    await learnDraftReject(id);
-    showToast('Draft rejected');
+    try {
+      await learnDraftReject(id);
+      showToast('Draft rejected');
+    } catch (err) {
+      showToast(`Error: draft rejection unavailable (${err})`);
+    }
     loadDrafts();
   };
 

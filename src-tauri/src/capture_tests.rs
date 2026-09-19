@@ -1,5 +1,6 @@
 use super::*;
 use crate::gate::Rule;
+use crate::gate::TEST_RULES_MUTEX;
 use std::fs::File;
 
 #[test]
@@ -50,14 +51,19 @@ fn test_cleanup_old_captures_limits_to_max_keep() {
 
 #[test]
 fn test_screen_capture_gate_denial() {
-    let mut store = load_rules();
-    store.deny.push(Rule {
-        kind: Some(ActionKind::ScreenCapture),
-        pattern: "*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
+    {
+        let mut store = load_rules();
+        store.deny.push(Rule {
+            kind: Some(ActionKind::ScreenCapture),
+            pattern: "*".to_string(),
+        });
+        let _ = crate::gate::save_rules(&store);
+    }
 
     let res = screen_capture(Some("primary_monitor".to_string()), None);
+    let _ = crate::gate::save_rules(&snapshot);
     assert!(!res.ok);
     assert_eq!(res.code.as_deref(), Some("DENIED"));
 }

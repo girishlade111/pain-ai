@@ -1,5 +1,6 @@
 use super::*;
 use crate::gate::Rule;
+use crate::gate::TEST_RULES_MUTEX;
 
 fn sample_node(id: &str, name: &str, role: &str, aid: Option<&str>, class: Option<&str>) -> Node {
     Node {
@@ -219,21 +220,27 @@ fn test_x11_input_always_supported() {
 
 #[test]
 fn test_atspi_gate_denied_app_blocks_action() {
-    let mut store = load_rules();
-    store.deny.push(Rule {
-        kind: Some(ActionKind::UiAct),
-        pattern: "*password-vault*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
-
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
+    store_deny_rule_for_test();
     let res = ui_act(
         "atspi:node-1".to_string(),
         "click".to_string(),
         None,
         Some("password-vault".to_string()),
     );
+    let _ = crate::gate::save_rules(&snapshot);
     assert!(!res.ok, "Action on denied app must be rejected");
     assert_eq!(res.code.as_deref(), Some("DENIED"));
+}
+
+fn store_deny_rule_for_test() {
+    let mut store = load_rules();
+    store.deny.push(Rule {
+        kind: Some(ActionKind::UiAct),
+        pattern: "*password-vault*".to_string(),
+    });
+    let _ = crate::gate::save_rules(&store);
 }
 
 // -----------------------------------------------------------------------------
@@ -242,17 +249,22 @@ fn test_atspi_gate_denied_app_blocks_action() {
 
 #[test]
 fn test_atspi_fallback_decision_on_miss() {
-    let mut store = load_rules();
-    store.global.push(Rule {
-        kind: Some(ActionKind::UiAct),
-        pattern: "*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
+    {
+        let mut store = load_rules();
+        store.global.push(Rule {
+            kind: Some(ActionKind::UiAct),
+            pattern: "*".to_string(),
+        });
+        let _ = crate::gate::save_rules(&store);
+    }
 
     let res = ui_find(
         "NonExistentSuperWidget_XYZ_99999".to_string(),
         Some("nonexistent_app_abc".to_string()),
     );
+    let _ = crate::gate::save_rules(&snapshot);
     assert!(!res.ok);
     assert_eq!(res.code.as_deref(), Some("POOR_TREE"));
     assert!(res.hint.as_deref().unwrap_or("").contains("tree-miss"));

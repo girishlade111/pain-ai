@@ -4,15 +4,16 @@ import {
   mcpEnable,
   mcpConfigure,
   mcpTools,
-  MOCK_MCP_SERVERS,
-  MOCK_MCP_TOOLS,
   type McpServerInfo,
   type McpToolInfo,
 } from '../lib/skills';
 
 export function Connectors() {
-  const [servers, setServers] = useState<McpServerInfo[]>(MOCK_MCP_SERVERS);
-  const [tools, setTools] = useState<McpToolInfo[]>(MOCK_MCP_TOOLS);
+  // Phase 2: start empty; servers/tools load from the desktop. Never seed
+  // mock connectors as live data. Failures surface in loadError, not fakes.
+  const [servers, setServers] = useState<McpServerInfo[]>([]);
+  const [tools, setTools] = useState<McpToolInfo[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [configuringServer, setConfiguringServer] = useState<McpServerInfo | null>(null);
   const [configForm, setConfigForm] = useState<{
     command: string;
@@ -42,25 +43,33 @@ export function Connectors() {
 
   const loadData = async () => {
     try {
+      setLoadError(null);
       const serverList = await mcpList();
       setServers(serverList);
       const toolList = await mcpTools();
       setTools(toolList);
     } catch (err) {
       console.error('Failed to load MCP servers:', err);
+      setLoadError(`MCP connectors unavailable: ${err}`);
+      setServers([]);
+      setTools([]);
     }
   };
 
   const handleToggle = async (serverId: string, currentEnabled: boolean) => {
     const nextState = !currentEnabled;
-    const ok = await mcpEnable(serverId, nextState);
-    if (ok) {
-      setServers((prev) =>
-        prev.map((s) => (s.id === serverId ? { ...s, enabled: nextState } : s))
-      );
-      showToast(`${nextState ? 'Enabled' : 'Disabled'} connector "${serverId}"`);
-      const updatedTools = await mcpTools();
-      setTools(updatedTools);
+    try {
+      const ok = await mcpEnable(serverId, nextState);
+      if (ok) {
+        setServers((prev) =>
+          prev.map((s) => (s.id === serverId ? { ...s, enabled: nextState } : s))
+        );
+        showToast(`${nextState ? 'Enabled' : 'Disabled'} connector "${serverId}"`);
+        const updatedTools = await mcpTools();
+        setTools(updatedTools);
+      }
+    } catch (err) {
+      showToast(`Error: failed to update connector (${err})`);
     }
   };
 
@@ -93,11 +102,15 @@ export function Connectors() {
       configPayload.token = configForm.apiKey;
     }
 
-    const ok = await mcpConfigure(configuringServer.id, configPayload);
-    if (ok) {
-      showToast(`Updated configuration for ${configuringServer.name}`);
-      setConfiguringServer(null);
-      loadData();
+    try {
+      const ok = await mcpConfigure(configuringServer.id, configPayload);
+      if (ok) {
+        showToast(`Updated configuration for ${configuringServer.name}`);
+        setConfiguringServer(null);
+        loadData();
+      }
+    } catch (err) {
+      showToast(`Error: failed to save configuration (${err})`);
     }
   };
 
@@ -127,6 +140,13 @@ export function Connectors() {
       </div>
 
       <div className="max-w-[1100px] w-full mx-auto p-6 space-y-8">
+        {/* Load error — explicit, never fake servers */}
+        {loadError && (
+          <div className="p-4 rounded-xl bg-error/10 border border-error/30 text-xs text-body" role="alert">
+            <span className="font-semibold text-error">Unavailable: </span>
+            {loadError}
+          </div>
+        )}
         {/* Informational Invariant Banner */}
         <div className="p-4 rounded-xl bg-surface-soft border border-hairline flex items-start space-x-3 text-xs text-body">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary flex-shrink-0 mt-0.5">

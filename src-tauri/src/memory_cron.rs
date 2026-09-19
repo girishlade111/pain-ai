@@ -502,12 +502,14 @@ pub async fn context_compress(
     let compressed_tokens = orig_tokens / 3;
     let saved = orig_tokens - compressed_tokens;
 
+    // Phase 2: this is a length estimate, not a summarization. The snippet
+    // must not impersonate a compaction summary block.
     Ok(CompressResultDto {
         compressed: true,
         original_tokens: orig_tokens,
         compressed_tokens,
         tokens_saved: saved,
-        summary_snippet: "[CONTEXT COMPACTION SUMMARY] Prior turns summarized into compact context block.".to_string(),
+        summary_snippet: "Desktop length estimate only (chars/4, head/tail unaware). Server-side summarization lives at sidecar POST /v1/chat/compress.".to_string(),
     })
 }
 

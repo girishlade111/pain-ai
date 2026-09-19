@@ -21,8 +21,12 @@ export function SettingsProviders() {
   const [saveFeedbackMap, setSaveFeedbackMap] = useState<Record<string, string>>({});
 
   const handleUpdateSubagents = async (enabled: boolean, maxParallel: number) => {
-    const updated = await subagentConfigSet(enabled, maxParallel);
-    setSubagentConfig({ enabled: updated.enabled, maxParallel: updated.max_parallel });
+    try {
+      const updated = await subagentConfigSet(enabled, maxParallel);
+      setSubagentConfig({ enabled: updated.enabled, maxParallel: updated.max_parallel });
+    } catch (err) {
+      console.error('Failed to update subagent config:', err);
+    }
   };
 
   // Initialize key status and URLs
@@ -49,24 +53,41 @@ export function SettingsProviders() {
     };
   }, []);
 
+  const isDesktopRuntime =
+    typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+
   const handleSaveKey = async (id: string) => {
     const key = inputKeyMap[id] || '';
     if (key.trim()) {
-      await setApiKey(id, key.trim());
-      setKeyStatusMap((prev) => ({ ...prev, [id]: true }));
-      setInputKeyMap((prev) => ({ ...prev, [id]: '' }));
-      setSaveFeedbackMap((prev) => ({ ...prev, [id]: 'Saved to Windows Credential Manager' }));
-      setTimeout(() => {
-        setSaveFeedbackMap((prev) => ({ ...prev, [id]: '' }));
-      }, 3000);
+      try {
+        await setApiKey(id, key.trim());
+        setKeyStatusMap((prev) => ({ ...prev, [id]: true }));
+        setInputKeyMap((prev) => ({ ...prev, [id]: '' }));
+        // Phase 2: honest storage feedback — keychain only on desktop.
+        setSaveFeedbackMap((prev) => ({
+          ...prev,
+          [id]: isDesktopRuntime
+            ? 'Saved to OS keychain'
+            : 'Noted locally (browser preview — save in the desktop app for keychain storage)',
+        }));
+        setTimeout(() => {
+          setSaveFeedbackMap((prev) => ({ ...prev, [id]: '' }));
+        }, 3000);
+      } catch (err) {
+        setSaveFeedbackMap((prev) => ({ ...prev, [id]: `Error: failed to save key (${err})` }));
+      }
     }
   };
 
   const handleDeleteKey = async (id: string) => {
-    await deleteApiKey(id);
-    setKeyStatusMap((prev) => ({ ...prev, [id]: false }));
-    setInputKeyMap((prev) => ({ ...prev, [id]: '' }));
-    setSaveFeedbackMap((prev) => ({ ...prev, [id]: 'Key removed from keychain' }));
+    try {
+      await deleteApiKey(id);
+      setKeyStatusMap((prev) => ({ ...prev, [id]: false }));
+      setInputKeyMap((prev) => ({ ...prev, [id]: '' }));
+      setSaveFeedbackMap((prev) => ({ ...prev, [id]: 'Key removed' }));
+    } catch (err) {
+      setSaveFeedbackMap((prev) => ({ ...prev, [id]: `Error: failed to remove key (${err})` }));
+    }
     setTimeout(() => {
       setSaveFeedbackMap((prev) => ({ ...prev, [id]: '' }));
     }, 3000);

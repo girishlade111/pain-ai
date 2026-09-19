@@ -56,6 +56,7 @@ export function Skills() {
       }
     } catch (err) {
       console.error('Failed to load skills:', err);
+      showToast(`Error: failed to load skills (${err})`);
     } finally {
       setLoading(false);
     }
@@ -75,31 +76,42 @@ export function Skills() {
     if (!selectedSkillName) return;
     skillView(selectedSkillName).then((detail) => {
       setSelectedSkill(detail);
+    }).catch((err) => {
+      console.error('Failed to load skill detail:', err);
+      showToast(`Error: failed to load skill "${selectedSkillName}" (${err})`);
     });
   }, [selectedSkillName]);
 
   const handleTrustToggle = async () => {
     if (!selectedSkill) return;
     const nextState = !selectedSkill.trusted;
-    const success = await skillsTrust('pain-ai', selectedSkill.name, nextState);
-    if (success) {
-      setSelectedSkill({ ...selectedSkill, trusted: nextState });
-      setSkills((prev) =>
-        prev.map((s) => (s.name === selectedSkill.name ? { ...s, trusted: nextState } : s))
-      );
-      showToast(
-        nextState
-          ? `Trust granted to project skill "${selectedSkill.name}"`
-          : `Trust revoked from project skill "${selectedSkill.name}"`
-      );
+    try {
+      const success = await skillsTrust('pain-ai', selectedSkill.name, nextState);
+      if (success) {
+        setSelectedSkill({ ...selectedSkill, trusted: nextState });
+        setSkills((prev) =>
+          prev.map((s) => (s.name === selectedSkill.name ? { ...s, trusted: nextState } : s))
+        );
+        showToast(
+          nextState
+            ? `Trust granted to project skill "${selectedSkill.name}"`
+            : `Trust revoked from project skill "${selectedSkill.name}"`
+        );
+      }
+    } catch (err) {
+      showToast(`Error: trust update failed (${err})`);
     }
   };
 
   const handleRemoveSkill = async (name: string) => {
-    const ok = await skillsRemove(name);
-    if (ok) {
-      showToast(`Removed skill ${name}`);
-      loadSkills();
+    try {
+      const ok = await skillsRemove(name);
+      if (ok) {
+        showToast(`Removed skill ${name}`);
+        loadSkills();
+      }
+    } catch (err) {
+      showToast(`Error: failed to remove skill (${err})`);
     }
   };
 
@@ -121,35 +133,29 @@ export function Skills() {
     const result = await skillsInstall('tests/fixtures/hub-tap/dirty-tool', 'dirty-tool');
     if (!result.ok) {
       setQuarantineError(result.error || 'Quarantine security violation detected');
-      setQuarantineFindings(
-        result.findings || [
-          {
-            rule: 'api_key_openai_anthropic',
-            file: 'scripts/run.sh',
-            line: 4,
-            snippet: 'export OPENAI_API_KEY="sk-proj-test1234567890abcdef"',
-          },
-          {
-            rule: 'root_deletion',
-            file: 'scripts/run.sh',
-            line: 7,
-            snippet: 'rm -rf / --no-preserve-root',
-          },
-        ]
-      );
+      // Phase 2: render only scanner-returned findings; never fabricate entries.
+      setQuarantineFindings(result.findings || []);
     }
   };
 
   const handleApproveDraft = async (id: string) => {
-    await learnDraftApprove(id);
-    showToast('Learned skill draft approved and activated into user skills');
+    try {
+      await learnDraftApprove(id);
+      showToast('Learned skill draft approved and activated into user skills');
+    } catch (err) {
+      showToast(`Error: draft approval unavailable (${err})`);
+    }
     loadDrafts();
     loadSkills();
   };
 
   const handleRejectDraft = async (id: string) => {
-    await learnDraftReject(id);
-    showToast('Skill draft rejected');
+    try {
+      await learnDraftReject(id);
+      showToast('Skill draft rejected');
+    } catch (err) {
+      showToast(`Error: draft rejection unavailable (${err})`);
+    }
     loadDrafts();
   };
 

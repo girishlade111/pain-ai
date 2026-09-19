@@ -65,12 +65,19 @@ fn get_app_data_audio_dir() -> PathBuf {
     dir
 }
 
-/// Synthesizes speech for a sentence using sidecar tts.py (or fallback)
+/// Synthesizes speech for a sentence using sidecar tts.py (single owner).
+/// Phase 2: no Rust-side tone synthesis. If the engine is unavailable the
+/// caller receives an explicit error; a sine tone presented as speech would be
+/// fabricated output.
 pub fn generate_sentence_wav(text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
-    let tts_script = PathBuf::from("sidecar/voice/tts.py");
-    if tts_script.exists() {
+    // cargo test runs with CWD=src-tauri; the desktop runs with CWD=repo root.
+    let tts_script = ["sidecar/voice/tts.py", "../sidecar/voice/tts.py"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists());
+    if let Some(script) = tts_script {
         let mut cmd = std::process::Command::new("python");
-        cmd.arg("sidecar/voice/tts.py").arg("--text").arg(text);
+        cmd.arg(&script).arg("--text").arg(text);
         if let Some(v) = voice {
             cmd.arg("--voice").arg(v);
         }
@@ -84,36 +91,21 @@ pub fn generate_sentence_wav(text: &str, voice: Option<&str>) -> Result<PathBuf,
                             return Ok(path);
                         }
                     }
+                    if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                        return Err(format!("TTS engine failed: {}", err));
+                    }
                 }
+                return Err("TTS engine returned unparseable output".to_string());
             }
+            return Err(format!(
+                "TTS engine exited with status {}",
+                output.status.code().unwrap_or(-1)
+            ));
         }
+        return Err("Failed to spawn TTS engine (sidecar/voice/tts.py)".to_string());
     }
 
-    // Direct fallback: generate pure PCM WAV via hound
-    let fallback_dir = get_app_data_audio_dir().join("tts_fallback");
-    let _ = fs::create_dir_all(&fallback_dir);
-    let filename = format!("synth_{:016x}.wav", text.len());
-    let path = fallback_dir.join(filename);
-
-    if !path.exists() {
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate: 22050,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-        let duration_sec = (text.split_whitespace().count() as f32 * 0.4).max(0.4);
-        let num_samples = (22050.0 * duration_sec) as usize;
-        for i in 0..num_samples {
-            let t = i as f32 / 22050.0;
-            let sample = (0.3 * (2.0 * std::f32::consts::PI * 220.0 * t).sin() * 32767.0) as i16;
-            let _ = writer.write_sample(sample);
-        }
-        let _ = writer.finalize();
-    }
-
-    Ok(path)
+    Err("TTS engine script not found (sidecar/voice/tts.py)".to_string())
 }
 
 /// Plays sentence items sequentially on the audio queue while emitting live voice_state events
@@ -371,29 +363,41 @@ pub fn voice_record_stop() -> Result<RecordResult, String> {
     })
 }
 
-/// Invokes sidecar stt.py to transcribe the provided WAV path
+/// Invokes sidecar stt.py to transcribe the provided WAV path.
+/// Phase 2: explicit errors only. A canned transcript would enter the prompt
+/// as fabricated user input.
 pub fn stt_transcribe(wav_path: &str) -> Result<SttResult, String> {
-    let stt_script = PathBuf::from("sidecar/voice/stt.py");
-    if stt_script.exists() {
+    // cargo test runs with CWD=src-tauri; the desktop runs with CWD=repo root.
+    let stt_script = ["sidecar/voice/stt.py", "../sidecar/voice/stt.py"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists());
+    if let Some(script) = stt_script {
         let mut cmd = std::process::Command::new("python");
-        cmd.arg("sidecar/voice/stt.py").arg("--wav").arg(wav_path);
+        cmd.arg(&script).arg("--wav").arg(wav_path);
 
         if let Ok(output) = cmd.output() {
             if output.status.success() {
                 if let Ok(res) = serde_json::from_slice::<SttResult>(&output.stdout) {
+                    if !res.ok {
+                        return Err("STT engine unavailable (STT_UNAVAILABLE)".to_string());
+                    }
+                    if res.text.trim().is_empty() {
+                        return Err("STT engine returned empty transcript".to_string());
+                    }
                     return Ok(res);
                 }
+                return Err("STT engine returned unparseable output".to_string());
             }
+            return Err(format!(
+                "STT engine exited with status {}",
+                output.status.code().unwrap_or(-1)
+            ));
         }
+        return Err("Failed to spawn STT engine (sidecar/voice/stt.py)".to_string());
     }
 
-    Ok(SttResult {
-        ok: true,
-        text: "Inspect system status and run security verification.".into(),
-        lang: Some("en".into()),
-        ms: 120,
-        engine: "offline_fallback".into(),
-    })
+    Err("STT engine script not found (sidecar/voice/stt.py)".to_string())
 }
 
 #[cfg(test)]

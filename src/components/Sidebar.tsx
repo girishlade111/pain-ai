@@ -12,7 +12,7 @@ interface NavItem {
 }
 
 export function Sidebar({ onCloseMobile }: SidebarProps) {
-  const { activeTab, setActiveTab, clearChat, resetSeed, messages } = useAppStore();
+  const { activeTab, setActiveTab, clearChat } = useAppStore();
 
   const navItems: NavItem[] = [
     {
@@ -134,16 +134,6 @@ export function Sidebar({ onCloseMobile }: SidebarProps) {
             </svg>
             <span>New chat</span>
           </button>
-          {messages.length === 0 && (
-            <button
-              type="button"
-              onClick={resetSeed}
-              className="py-2 px-2.5 rounded-md bg-surface-card hover:bg-surface-cream-strong text-muted hover:text-ink font-sans text-[12px] font-medium border border-hairline-soft transition-colors cursor-pointer"
-              title="Reload seed conversation"
-            >
-              Seed
-            </button>
-          )}
         </div>
 
         {/* Navigation list */}

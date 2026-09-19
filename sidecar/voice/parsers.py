@@ -38,7 +38,10 @@ except ImportError:
         from sidecar.voice.stt import transcribe
     except ImportError:
         def transcribe(wav_path: str):
-            return {"ok": True, "text": "Sample media audio transcription.", "engine": "fallback"}
+            # Phase 2: explicit STT unavailability, never a canned transcript.
+            return {"ok": False, "text": "", "engine": "unavailable",
+                    "code": "STT_UNAVAILABLE",
+                    "error": "Speech-to-text engine unavailable for media audio track."}
 
 logger = logging.getLogger("parsers")
 
@@ -278,7 +281,11 @@ def _parse_video(path: Path) -> Dict[str, Any]:
         transcript_text = "[No audio track detected]"
         if audio_wav.exists() and audio_wav.stat().st_size > 44:
             stt_res = transcribe(str(audio_wav))
-            transcript_text = stt_res.get("text", "")
+            if stt_res.get("ok"):
+                transcript_text = stt_res.get("text", "")
+            else:
+                # Phase 2: surface STT failure explicitly, never a canned transcript.
+                transcript_text = f"[Audio transcription unavailable: {stt_res.get('code', 'STT_UNAVAILABLE')}]"
 
         return {
             "ok": True,

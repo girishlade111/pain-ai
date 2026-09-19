@@ -1,16 +1,22 @@
 use super::*;
 use crate::gate::Rule;
+use crate::gate::TEST_RULES_MUTEX;
 
 #[test]
 fn test_clipboard_read_gate_denial() {
-    let mut store = load_rules();
-    store.deny.push(Rule {
-        kind: Some(ActionKind::ClipboardRead),
-        pattern: "*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
+    {
+        let mut store = load_rules();
+        store.deny.push(Rule {
+            kind: Some(ActionKind::ClipboardRead),
+            pattern: "*".to_string(),
+        });
+        let _ = crate::gate::save_rules(&store);
+    }
 
     let res = clipboard_read_text();
+    let _ = crate::gate::save_rules(&snapshot);
     assert!(!res.ok);
     assert_eq!(res.code.as_deref(), Some("DENIED"));
 }

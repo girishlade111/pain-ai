@@ -1,6 +1,10 @@
 /**
  * pain ai — Skills System & MCP Connectors Client API
  * Source of truth: PRD.md §4.3 + SKILL.md + skills.rs + skills_manager.py
+ *
+ * Phase 2: MOCK_* exports below are TEST FIXTURES ONLY (unit tests, Storybook).
+ * Production paths (Tauri invoke) throw explicit errors on failure — they never
+ * return mock servers, tools, or skills as live data.
  */
 
 export interface SkillSummary {
@@ -214,128 +218,58 @@ export const MOCK_MCP_TOOLS: McpToolInfo[] = [
 
 export async function skillsList(workspace?: string): Promise<SkillSummary[]> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<SkillSummary[]>('skills_list', { workspace });
-    } catch (err) {
-      console.warn('skills_list invoke failed, falling back to mock:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<SkillSummary[]>('skills_list', { workspace });
   }
-  return MOCK_SKILLS;
+  throw new Error('skills_list unavailable: desktop runtime required (Tauri invoke unavailable).');
 }
 
 export async function skillView(name: string, path?: string, workspace?: string): Promise<SkillDetail> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<SkillDetail>('skill_view', { name, path, workspace });
-    } catch (err) {
-      console.warn('skill_view invoke failed, falling back to mock:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<SkillDetail>('skill_view', { name, path, workspace });
   }
-
-  const found = MOCK_SKILLS.find((s) => s.name === name) || MOCK_SKILLS[0];
-  return {
-    name: found.name,
-    description: found.description,
-    source: found.source,
-    source_dir: found.source_dir,
-    trusted: found.trusted,
-    version: found.version || '1.0.0',
-    author: found.author || 'pain-ai',
-    license: 'Apache-2.0',
-    platforms: ['windows', 'linux'],
-    required_environment_variables: ['PAIN_AI_WORKSPACE'],
-    required_credential_files: [],
-    tools_required: ['read_file', 'terminal'],
-    content: `# ${found.name}\n\n${found.description}\n\n## Instructions\n\n1. Check current workspace context.\n2. Execute primary action safely with user gate approval.\n3. Return concise summary to operator.`,
-  };
+  throw new Error(`skill_view unavailable for '${name}': desktop runtime required.`);
 }
 
 export async function skillsTrust(workspace: string, skillName: string, trusted: boolean): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('skills_trust', { workspace, skillName, trusted });
-    } catch (err) {
-      console.warn('skills_trust invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('skills_trust', { workspace, skillName, trusted });
   }
-  const item = MOCK_SKILLS.find((s) => s.name === skillName);
-  if (item) item.trusted = trusted;
-  return true;
+  throw new Error('skills_trust unavailable: desktop runtime required.');
 }
 
 export async function skillsInstall(sourceDir: string, skillName: string): Promise<HubInstallResult> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<HubInstallResult>('skills_install', { sourceDir, skillName });
-    } catch (err: any) {
-      return { ok: false, name: skillName, error: err.toString() };
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<HubInstallResult>('skills_install', { sourceDir, skillName });
   }
-  // Mock behavior
-  if (skillName.includes('dirty')) {
-    return {
-      ok: false,
-      name: skillName,
-      error: 'Quarantine audit failed: detected active secrets or blocklisted commands.',
-      findings: [
-        {
-          rule: 'api_key_openai_anthropic',
-          file: 'scripts/run.sh',
-          line: 4,
-          snippet: 'export OPENAI_API_KEY="sk-proj-test1234567890abcdef"',
-        },
-        {
-          rule: 'root_deletion',
-          file: 'scripts/run.sh',
-          line: 7,
-          snippet: 'rm -rf / --no-preserve-root',
-        },
-      ],
-    };
-  }
-  return { ok: true, name: skillName, version: '1.0.0' };
+  throw new Error(`skills_install unavailable for '${skillName}': desktop runtime required.`);
 }
 
 export async function skillsRemove(name: string): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('skills_remove', { name });
-    } catch (err) {
-      console.warn('skills_remove invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('skills_remove', { name });
   }
-  return true;
+  throw new Error(`skills_remove unavailable for '${name}': desktop runtime required.`);
 }
 
 export async function mcpList(workspace?: string): Promise<McpServerInfo[]> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<McpServerInfo[]>('mcp_list', { workspace });
-    } catch (err) {
-      console.warn('mcp_list invoke failed, falling back to mock:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<McpServerInfo[]>('mcp_list', { workspace });
   }
-  return MOCK_MCP_SERVERS;
+  throw new Error('mcp_list unavailable: desktop runtime required.');
 }
 
 export async function mcpEnable(serverId: string, enabled: boolean, workspace?: string): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('mcp_enable', { serverId, enabled, workspace });
-    } catch (err) {
-      console.warn('mcp_enable invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('mcp_enable', { serverId, enabled, workspace });
   }
-  const s = MOCK_MCP_SERVERS.find((m) => m.id === serverId);
-  if (s) s.enabled = enabled;
-  return true;
+  throw new Error(`mcp_enable unavailable for '${serverId}': desktop runtime required.`);
 }
 
 export async function mcpConfigure(
@@ -344,66 +278,40 @@ export async function mcpConfigure(
   workspace?: string
 ): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('mcp_configure', { serverId, config, workspace });
-    } catch (err) {
-      console.warn('mcp_configure invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('mcp_configure', { serverId, config, workspace });
   }
-  return true;
+  throw new Error(`mcp_configure unavailable for '${serverId}': desktop runtime required.`);
 }
 
 export async function mcpTools(serverId?: string): Promise<McpToolInfo[]> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<McpToolInfo[]>('mcp_tools', { serverId });
-    } catch (err) {
-      console.warn('mcp_tools invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<McpToolInfo[]>('mcp_tools', { serverId });
   }
-  return [
-    { name: 'mcp_filesystem_read_file', server_id: 'filesystem', description: 'Read file contents from filesystem' },
-    { name: 'mcp_filesystem_write_file', server_id: 'filesystem', description: 'Write file contents to filesystem' },
-    { name: 'mcp_git_status', server_id: 'git', description: 'Show the working tree status' },
-    { name: 'mcp_git_diff', server_id: 'git', description: 'Show changes between commits or work tree' },
-    { name: 'mcp_fetch_get', server_id: 'fetch', description: 'Retrieve web resource as markdown' },
-  ];
+  throw new Error('mcp_tools unavailable: desktop runtime required.');
 }
 
 export async function learnDraftsList(): Promise<LearnDraft[]> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<LearnDraft[]>('learn_drafts_list');
-    } catch (err) {
-      console.warn('learn_drafts_list invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<LearnDraft[]>('learn_drafts_list');
   }
   return [];
 }
 
 export async function learnDraftApprove(draftId: string): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('learn_draft_approve', { draftId });
-    } catch (err) {
-      console.warn('learn_draft_approve invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('learn_draft_approve', { draftId });
   }
-  return true;
+  throw new Error(`learn_draft_approve unavailable for '${draftId}': desktop runtime required.`);
 }
 
 export async function learnDraftReject(draftId: string): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('learn_draft_reject', { draftId });
-    } catch (err) {
-      console.warn('learn_draft_reject invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('learn_draft_reject', { draftId });
   }
-  return true;
+  throw new Error(`learn_draft_reject unavailable for '${draftId}': desktop runtime required.`);
 }

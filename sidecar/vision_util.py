@@ -112,10 +112,13 @@ async def vision_analyze(
             "fix": "Switch to gemma3, qwen2.5vl (Ollama), or gpt-4o in ModelPicker",
         }
 
-    # Multimodal call simulation / wrapper
+    # Phase 2: no canned vision descriptions. There is no local multimodal
+    # backend wired here; fabricating a scene description would present fake
+    # data as model output. Return an explicit, actionable error instead.
     return {
-        "ok": True,
-        "data": f"Visual scene description for prompt '{prompt}' using {model}",
-        "code": None,
-        "error": None,
+        "ok": False,
+        "data": None,
+        "error": f"No vision backend wired for model '{model}'. Wire a multimodal call or route via ui_tools fallback prompt.",
+        "code": "NO_VISION_BACKEND",
+        "fix": "Route the prepared image through the active provider chat call or use build_vlm_fallback_prompt()",
     }

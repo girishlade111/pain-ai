@@ -1,5 +1,6 @@
 use super::*;
 use crate::gate::Rule;
+use crate::gate::TEST_RULES_MUTEX;
 
 fn sample_node(id: &str, name: &str, role: &str, aid: Option<&str>, class: Option<&str>) -> Node {
     Node {
@@ -137,17 +138,22 @@ fn test_rect_convert_200_percent() {
 
 #[test]
 fn test_fallback_decision_on_miss() {
-    let mut store = load_rules();
-    store.global.push(Rule {
-        kind: Some(ActionKind::UiAct),
-        pattern: "*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
+    {
+        let mut store = load_rules();
+        store.global.push(Rule {
+            kind: Some(ActionKind::UiAct),
+            pattern: "*".to_string(),
+        });
+        let _ = crate::gate::save_rules(&store);
+    }
 
     let res = ui_find(
         "NonExistentSuperWidget_XYZ_99999".to_string(),
         Some("nonexistent_app_abc".to_string()),
     );
+    let _ = crate::gate::save_rules(&snapshot);
     // Tree miss should return hint for vision fallback
     assert!(!res.ok);
     assert_eq!(res.code.as_deref(), Some("POOR_TREE"));
@@ -156,13 +162,17 @@ fn test_fallback_decision_on_miss() {
 
 #[test]
 fn test_gate_denied_app_blocks_action() {
+    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let snapshot = load_rules();
     // Save a deny rule for "password-vault"
-    let mut store = load_rules();
-    store.deny.push(Rule {
-        kind: Some(ActionKind::UiAct),
-        pattern: "*password-vault*".to_string(),
-    });
-    let _ = crate::gate::save_rules(&store);
+    {
+        let mut store = load_rules();
+        store.deny.push(Rule {
+            kind: Some(ActionKind::UiAct),
+            pattern: "*password-vault*".to_string(),
+        });
+        let _ = crate::gate::save_rules(&store);
+    }
 
     let res = ui_act(
         "btn-1".to_string(),
@@ -170,6 +180,7 @@ fn test_gate_denied_app_blocks_action() {
         None,
         Some("password-vault".to_string()),
     );
+    let _ = crate::gate::save_rules(&snapshot);
     assert!(!res.ok, "Action on denied app must be rejected");
     assert_eq!(res.code.as_deref(), Some("DENIED"));
 }

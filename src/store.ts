@@ -17,64 +17,8 @@ export interface Msg {
   code?: MsgCode;
 }
 
-const SEED_MESSAGES: Msg[] = [
-  {
-    id: 'seed-1',
-    role: 'user',
-    body: 'Can you inspect my system environment and current workspace setup?',
-  },
-  {
-    id: 'seed-2',
-    role: 'agent',
-    headline: 'Environment Diagnostics',
-    body: 'I inspected your local machine. You are running Windows 11 with Node.js and Rust installed. The local-first permission gate is configured in fail-closed manual mode.',
-  },
-  {
-    id: 'seed-3',
-    role: 'user',
-    body: 'Show me a sample utility for capturing telemetry metrics with wide output lines.',
-  },
-  {
-    id: 'seed-4',
-    role: 'agent',
-    headline: 'Telemetry Service Stub',
-    body: 'Here is the sample Rust implementation for capturing system telemetry. The code card retains strict horizontal scrolling without wrapping wide signatures or diagnostic log format strings:',
-    code: {
-      filename: 'telemetry.rs',
-      lang: 'rust',
-      content: `use std::time::{SystemTime, UNIX_EPOCH};
-
-// System telemetry sampler with wide diagnostic signatures for gate inspection
-pub fn sample_system_telemetry(metrics_buffer: &mut Vec<String>, collect_hardware_counters: bool, verbose_trace_id: u64) -> Result<usize, std::io::Error> {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-    let entry = format!("[TELEMETRY-SAMPLER-STREAM-NODE-01] timestamp_ms={timestamp} trace_id={verbose_trace_id:016x} hw_counters={collect_hardware_counters} allocation_status=STEADY_STATE_RESERVED_OK");
-    metrics_buffer.push(entry);
-    Ok(metrics_buffer.len())
-}`,
-    },
-  },
-  {
-    id: 'seed-5',
-    role: 'user',
-    body: 'Looks clean. Can we verify this with the permission gate next?',
-  },
-];
-
-const SEED_APPROVALS: PendingApprovalItem[] = [
-  {
-    id: 'appr-demo-1',
-    kind: 'ShellExec',
-    target: 'git push --force origin main',
-    detail: 'git push --force origin main',
-    app: 'git',
-    workspace: 'pain-ai',
-    level: 'High',
-    summary: 'Destructive remote git branch rewrite',
-    why: 'The agent attempted to force-push git commits to the remote repository. This permanently rewrites remote commit history.',
-    reversible: 'Irreversible action on remote server.',
-    createdAt: Date.now(),
-  },
-];
+// Phase 2: no seeded conversation or approvals in production. The thread starts
+// empty (EmptyState); approvals appear only from live gate/sidecar events.
 
 import type { DiffData } from './components/DiffView';
 import type { UiActionPreview } from './components/UiPreview';
@@ -162,7 +106,6 @@ interface AppState {
   setDraft: (draft: string) => void;
   send: (text?: string) => void;
   clearChat: () => void;
-  resetSeed: () => void;
   setActiveTab: (tab: string) => void;
   setMobileMenuOpen: (open: boolean) => void;
   toggleMode: () => void;
@@ -200,23 +143,18 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  messages: SEED_MESSAGES,
+  messages: [],
   draft: '',
   activeTab: 'Chat',
   mobileMenuOpen: false,
   mode: 'manual',
-  sidecarStatus: 'ready',
+  sidecarStatus: 'starting',
   currentSessionId: 'session-1',
-  approvals: SEED_APPROVALS,
+  approvals: [],
   pendingDiff: null,
   planDraft: null,
   uiPreview: null,
-  activeWindow: {
-    app: 'Visual Studio Code',
-    title: 'pain-ai — src/App.tsx',
-    pid: 1420,
-    updatedAt: Date.now(),
-  },
+  activeWindow: null,
   chibi: { state: 'idle', visible: true, size: 'M' },
   lastCapture: null,
   clipboardPreview: null,
@@ -227,7 +165,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isRecording: false,
   autoSendVoice: false,
   memoryNudge: false,
-  tokenUsage: { used: 4210, limit: 128000 },
+  tokenUsage: { used: 0, limit: 128000 },
   subagentConfig: { enabled: true, maxParallel: 3 },
   trustModal: null,
 
@@ -383,34 +321,28 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
         onError: (err) => {
           console.warn('[CHAT STREAM ERROR]', err);
-          // Fallback mock echo if sidecar offline
-          if (!accumulatedBody) {
-            const fallbackBody = `Echo: Received instruction "${content}". (Sidecar note: ${err})`;
-            set((state) => ({
-              messages: state.messages.map((m) =>
-                m.id === agentMsgId
-                  ? {
-                      ...m,
-                      headline: 'Command Executed',
-                      body: fallbackBody,
-                      code: {
-                        filename: 'dispatch.ts',
-                        lang: 'typescript',
-                        content: `export async function handleUserCommand(cmd: string): Promise<{ status: string; code: number }> {\n  console.log("[GATE] Evaluating command through host permission gate:", cmd);\n  return { status: "ALLOW_ONCE_PROCESSED", code: 0 };\n}`,
-                      },
-                    }
-                  : m
-              ),
-            }));
-            get().speakCaption(fallbackBody);
-          }
+          // Phase 2: explicit error bubble. Never fabricate an assistant answer
+          // on transport failure; surface status + code + message for the UI.
+          const errorBody = accumulatedBody
+            ? `${accumulatedBody}\n\n[Request failed: ${err}]`
+            : `Request failed: ${err}`;
+          set((state) => ({
+            messages: state.messages.map((m) =>
+              m.id === agentMsgId
+                ? {
+                    ...m,
+                    headline: 'Request failed',
+                    body: errorBody,
+                  }
+                : m
+            ),
+          }));
         },
       }
     );
   },
 
   clearChat: () => set({ messages: [] }),
-  resetSeed: () => set({ messages: SEED_MESSAGES }),
   setActiveTab: (activeTab) => set({ activeTab }),
   setMobileMenuOpen: (mobileMenuOpen) => set({ mobileMenuOpen }),
 
@@ -484,16 +416,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     } catch (e: any) {
       console.warn('acceptPendingDiff error:', e);
-      // Fallback UI acceptance
-      const confirmMsg: Msg = {
+      // Phase 2: explicit failure — never claim the diff was written.
+      const errMsg: Msg = {
         id: `msg-${Date.now()}-a`,
         role: 'agent',
-        headline: 'Diff Accepted & Written',
-        body: `Successfully applied unified diff to "${diff.path}". File updated atomically on disk.`,
+        headline: 'Diff Application Failed',
+        body: `Failed to write patch to "${diff.path}": ${e?.toString() || 'Unknown error'}. File left unmodified.`,
       };
       set((state) => ({
-        messages: [...state.messages, confirmMsg],
-        pendingDiff: null,
+        messages: [...state.messages, errMsg],
       }));
     }
   },
@@ -574,7 +505,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
     } catch (err) {
+      // Phase 2: voice/STT failure is explicit — never fill the draft with
+      // fabricated text. Surface an error bubble so the operator can retry.
       console.warn('[VOICE RECORD STOP FAILED]', err);
+      const errMsg: Msg = {
+        id: `msg-${Date.now()}-a`,
+        role: 'agent',
+        headline: 'Voice input failed',
+        body: `Voice transcription failed: ${err}. No text was added to the composer.`,
+      };
+      set((state) => ({ messages: [...state.messages, errMsg] }));
     }
   },
 

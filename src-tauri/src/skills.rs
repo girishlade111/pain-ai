@@ -592,10 +592,44 @@ pub fn skills_remove(name: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String> {
+pub fn mcp_list(workspace: Option<String>) -> Result<Vec<McpServerDto>, String> {
     // Desktop IPC mirror of sidecar/mcp_manager.CATALOG_SERVERS (authoritative for
-    // HTTP transport). Kept in sync by ID (filesystem/echo/github/notion); live
-    // per-workspace enablement + OAuth/API-key state live in the sidecar config.
+    // HTTP transport). Per-workspace enablement + API keys persist in
+    // ~/.pain-ai/mcp-servers.json (same shape as the sidecar); phase 2 reads
+    // them here so toggles survive restarts and mcp_tools derives honestly.
+    let home = get_pain_ai_home();
+    let cfg_path = home.join("mcp-servers.json");
+    let cfg: serde_json::Value = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let ws_key = workspace
+        .map(|w| w.replace('\\', "/"))
+        .unwrap_or_else(|| "default".to_string());
+    let enabled: Vec<String> = cfg
+        .get(&ws_key)
+        .and_then(|e| e.get("enabled"))
+        .and_then(|e| serde_json::from_value(e.clone()).ok())
+        .unwrap_or_else(|| vec!["echo".to_string(), "filesystem".to_string()]);
+    let has_key = |id: &str| {
+        cfg.get("keys")
+            .and_then(|k| k.get(id))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    };
+    let is_enabled = |id: &str| enabled.iter().any(|e| e == id);
+    let status_of = |id: &str, auth: &str| {
+        if !is_enabled(id) {
+            "disabled"
+        } else if auth == "api-key" {
+            if has_key(id) { "connected" } else { "needs-login" }
+        } else if auth == "oauth" {
+            "needs-login"
+        } else {
+            "connected"
+        }
+    };
     Ok(vec![
         McpServerDto {
             id: "filesystem".into(),
@@ -603,8 +637,8 @@ pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String>
             description: "Extended directory navigation and search operations.".into(),
             transport: "stdio".into(),
             auth: "none".into(),
-            status: "connected".into(),
-            enabled: true,
+            status: status_of("filesystem", "none").into(),
+            enabled: is_enabled("filesystem"),
             tool_count: 2,
             tools: vec![
                 serde_json::json!({"name": "read_dir_stats", "description": "Read directory tree statistics"}),
@@ -617,8 +651,8 @@ pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String>
             description: "Offline stdio echo server for MCP transport diagnostics.".into(),
             transport: "stdio".into(),
             auth: "none".into(),
-            status: "connected".into(),
-            enabled: true,
+            status: status_of("echo", "none").into(),
+            enabled: is_enabled("echo"),
             tool_count: 1,
             tools: vec![
                 serde_json::json!({"name": "echo", "description": "Echo input back"}),
@@ -630,8 +664,8 @@ pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String>
             description: "Inspect repositories, pull requests, issues, and git blame.".into(),
             transport: "stdio".into(),
             auth: "api-key".into(),
-            status: "needs-login".into(),
-            enabled: false,
+            status: status_of("github", "api-key").into(),
+            enabled: is_enabled("github"),
             tool_count: 2,
             tools: vec![
                 serde_json::json!({"name": "get_issue", "description": "Fetch GitHub issue"}),
@@ -644,8 +678,8 @@ pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String>
             description: "Connect pages and databases from personal Notion workspace.".into(),
             transport: "sse".into(),
             auth: "oauth".into(),
-            status: "disabled".into(),
-            enabled: false,
+            status: status_of("notion", "oauth").into(),
+            enabled: is_enabled("notion"),
             tool_count: 2,
             tools: vec![
                 serde_json::json!({"name": "query_database", "description": "Query database"}),
@@ -656,40 +690,87 @@ pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String>
 }
 
 #[tauri::command]
-pub fn mcp_enable(_server_id: String, enable: bool, _workspace: Option<String>) -> Result<bool, String> {
+pub fn mcp_enable(server_id: String, enable: bool, workspace: Option<String>) -> Result<bool, String> {
+    // Phase 2: persist per-workspace enablement to ~/.pain-ai/mcp-servers.json
+    // (same shape as sidecar/mcp_manager: {<ws_key>: {enabled: [...]}}).
+    // Previously returned success without persisting (fake).
+    let home = get_pain_ai_home();
+    let cfg_path = home.join("mcp-servers.json");
+    let ws_key = workspace
+        .map(|w| w.replace('\\', "/"))
+        .unwrap_or_else(|| "default".to_string());
+    let mut cfg: serde_json::Value = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let entry = cfg
+        .as_object_mut()
+        .ok_or_else(|| "MCP config is not a JSON object".to_string())?
+        .entry(ws_key.clone())
+        .or_insert_with(|| serde_json::json!({"enabled": ["echo", "filesystem"]}));
+    let enabled = entry
+        .get_mut("enabled")
+        .and_then(|e| e.as_array_mut())
+        .ok_or_else(|| "MCP config entry is malformed".to_string())?;
+    let val = serde_json::Value::String(server_id.clone());
+    if enable && !enabled.contains(&val) {
+        enabled.push(val);
+    } else if !enable {
+        enabled.retain(|v| v != &val);
+    }
+    fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     Ok(enable)
 }
 
 #[tauri::command]
-pub fn mcp_configure(_server_id: String, _api_key: String) -> Result<bool, String> {
+pub fn mcp_configure(server_id: String, api_key: String) -> Result<bool, String> {
+    // Phase 2: persist API keys to ~/.pain-ai/mcp-servers.json ("keys" map,
+    // same shape as sidecar). Previously returned success without storing.
+    if api_key.trim().is_empty() {
+        return Err("MCP API key must not be empty".to_string());
+    }
+    let home = get_pain_ai_home();
+    let cfg_path = home.join("mcp-servers.json");
+    let mut cfg: serde_json::Value = fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let obj = cfg
+        .as_object_mut()
+        .ok_or_else(|| "MCP config is not a JSON object".to_string())?;
+    let keys = obj
+        .entry("keys")
+        .or_insert_with(|| serde_json::json!({}));
+    keys[server_id] = serde_json::Value::String(api_key);
+    fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 
 #[tauri::command]
-pub fn mcp_tools(_workspace: Option<String>) -> Result<Vec<McpToolDto>, String> {
-    Ok(vec![
-        McpToolDto {
-            name: "mcp_filesystem_read_dir_stats".into(),
-            server_id: "filesystem".into(),
-            server_name: "Local Filesystem Extended".into(),
-            raw_name: "read_dir_stats".into(),
-            description: "Read directory tree statistics".into(),
-        },
-        McpToolDto {
-            name: "mcp_filesystem_find_duplicates".into(),
-            server_id: "filesystem".into(),
-            server_name: "Local Filesystem Extended".into(),
-            raw_name: "find_duplicates".into(),
-            description: "Scan directory for duplicates".into(),
-        },
-        McpToolDto {
-            name: "mcp_echo_echo".into(),
-            server_id: "echo".into(),
-            server_name: "Echo Diagnostic Server".into(),
-            raw_name: "echo".into(),
-            description: "Echo input back".into(),
-        },
-    ])
+pub fn mcp_tools(workspace: Option<String>) -> Result<Vec<McpToolDto>, String> {
+    // Phase 2: derive from actually-connected servers (mcp_list), never a
+    // hardcoded list. github/notion only contribute tools once configured.
+    let servers = mcp_list(workspace)?;
+    let mut out = Vec::new();
+    for s in servers.iter().filter(|s| s.status == "connected") {
+        for t in &s.tools {
+            let raw = t.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+            out.push(McpToolDto {
+                name: format!("mcp_{}_{}", s.id, raw),
+                server_id: s.id.clone(),
+                server_name: s.name.clone(),
+                raw_name: raw.to_string(),
+                description: t
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -701,11 +782,21 @@ pub fn learn_drafts_list() -> Result<Vec<LearnDraftDto>, String> {
 }
 
 #[tauri::command]
-pub fn learn_draft_approve(_draft_id: String) -> Result<bool, String> {
-    Ok(true)
+pub fn learn_draft_approve(draft_id: String) -> Result<bool, String> {
+    // Phase 2: drafts are owned by sidecar/skills_manager.DRAFTS_DIR via HTTP
+    // POST /v1/learn/drafts/{id}/approve. Approving an unknown local draft as
+    // success would be fabricated output.
+    Err(format!(
+        "Learn draft '{}' must be approved via the sidecar (POST /v1/learn/drafts/{}/approve); desktop invoke holds no draft store.",
+        draft_id, draft_id
+    ))
 }
 
 #[tauri::command]
-pub fn learn_draft_reject(_draft_id: String) -> Result<bool, String> {
-    Ok(true)
+pub fn learn_draft_reject(draft_id: String) -> Result<bool, String> {
+    // Phase 2: same ownership as approve — sidecar only, no local store.
+    Err(format!(
+        "Learn draft '{}' must be rejected via the sidecar (POST /v1/learn/drafts/{}/reject); desktop invoke holds no draft store.",
+        draft_id, draft_id
+    ))
 }

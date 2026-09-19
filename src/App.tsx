@@ -62,12 +62,13 @@ export function App() {
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   // Handle test view parameters (?view=empty, ?mobile=open, ?view=settings, ?view=approval-high, ?view=approval-settings, ?view=trust, ?view=ui-tree, ?view=ui-fallback)
+  // Phase 2: demo/fixture injections are DEV-ONLY. Production builds skip them
+  // entirely so the UI never presents fabricated messages, approvals, diffs,
+  // captures, or captions as live data.
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('view') === 'empty') {
-      clearChat();
-    }
+    // Navigation shortcuts are harmless and stay live in all builds.
     if (params.get('view') === 'settings' || params.get('view') === 'subagents') {
       setActiveTab('Settings');
       if (params.get('view') === 'subagents') {
@@ -90,6 +91,10 @@ export function App() {
     }
     if (params.get('mobile') === 'open') {
       setMobileMenuOpen(true);
+    }
+    if (import.meta.env.DEV) {
+    if (params.get('view') === 'empty') {
+      clearChat();
     }
     if (params.get('view') === 'trust') {
       showTrustModal('c:/Users/Girish Lade/projects/demo-repo');
@@ -376,12 +381,14 @@ export function App() {
         isRecording: true,
       });
     }
+    } // end DEV-only demo injections
 
-    if (params.get('sidecar') === 'dead') {
+    // ?sidecar= overrides are DEV-only fixtures; production always probes live.
+    if (import.meta.env.DEV && params.get('sidecar') === 'dead') {
       setSidecarStatus('dead');
-    } else if (params.get('sidecar') === 'reconnecting') {
+    } else if (import.meta.env.DEV && params.get('sidecar') === 'reconnecting') {
       setSidecarStatus('reconnecting');
-    } else if (params.get('sidecar') === 'starting') {
+    } else if (import.meta.env.DEV && params.get('sidecar') === 'starting') {
       setSidecarStatus('starting');
     } else {
       getSidecarStatus().then((res) => {

@@ -1,7 +1,14 @@
 /**
  * pain ai — Gate-First Commands Client API
  * Source of truth: PRD.md §4.3 + §6 + commands.rs
+ *
+ * Phase 2: no fabricated Success payloads. Outside the Tauri desktop runtime
+ * every function returns { status: 'Error' } (or throws for non-CommandOutput
+ * helpers) with code DESKTOP_RUNTIME_REQUIRED. Invoke failures already map to
+ * { status: 'Error' } below — never to mock data.
  */
+
+const DESKTOP_RUNTIME_REQUIRED = 'Desktop runtime required (Tauri invoke unavailable).';
 
 export interface FileReadResult {
   content: string;
@@ -57,17 +64,7 @@ export async function fileRead(
       return { status: 'Error', message: err.toString() };
     }
   }
-  return {
-    status: 'Success',
-    data: {
-      content: `[Browser Preview] Content of ${path}`,
-      total_lines: 1,
-      offset: offset || 1,
-      limit: limit || 2000,
-      is_binary: false,
-      size_bytes: 35,
-    },
-  };
+  return { status: 'Error', message: DESKTOP_RUNTIME_REQUIRED };
 }
 
 export async function fileSearch(
@@ -87,10 +84,7 @@ export async function fileSearch(
       return { status: 'Error', message: err.toString() };
     }
   }
-  return {
-    status: 'Success',
-    data: { matches: [`${dir}/example_match_${query}.ts`] },
-  };
+  return { status: 'Error', message: DESKTOP_RUNTIME_REQUIRED };
 }
 
 export async function fileWrite(
@@ -110,10 +104,7 @@ export async function fileWrite(
       return { status: 'Error', message: err.toString() };
     }
   }
-  return {
-    status: 'Success',
-    data: { bytes_written: content.length, path },
-  };
+  return { status: 'Error', message: DESKTOP_RUNTIME_REQUIRED };
 }
 
 export async function filePatch(
@@ -133,10 +124,7 @@ export async function filePatch(
       return { status: 'Error', message: err.toString() };
     }
   }
-  return {
-    status: 'Success',
-    data: { bytes_written: patch.length, path },
-  };
+  return { status: 'Error', message: DESKTOP_RUNTIME_REQUIRED };
 }
 
 export async function shellExec(
@@ -158,15 +146,7 @@ export async function shellExec(
       return { status: 'Error', message: err.toString() };
     }
   }
-  return {
-    status: 'Success',
-    data: {
-      stdout: `[Mock Execution]: ${cmd}\n`,
-      stderr: '',
-      exit_code: 0,
-      timed_out: false,
-    },
-  };
+  return { status: 'Error', message: DESKTOP_RUNTIME_REQUIRED };
 }
 
 export interface CaptureResult {
@@ -208,13 +188,7 @@ export async function screenCapture(
       maxDim,
     });
   }
-  return {
-    png_path: 'mock/captures/mock_display.png',
-    w: 1568,
-    h: 882,
-    source: target || 'primary_display',
-    b64: '',
-  };
+  throw new Error(`screen_capture unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function windowsList(): Promise<WindowInfo[]> {
@@ -222,15 +196,7 @@ export async function windowsList(): Promise<WindowInfo[]> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<WindowInfo[]>('windows_list');
   }
-  return [
-    {
-      id: 'mock-win-1',
-      title: 'pain ai — Antigravity',
-      app: 'pain ai',
-      is_minimized: false,
-      rect: { x: 0, y: 0, w: 1200, h: 800 },
-    },
-  ];
+  throw new Error(`windows_list unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function getActiveWindow(): Promise<ActiveWindowInfo> {
@@ -238,12 +204,7 @@ export async function getActiveWindow(): Promise<ActiveWindowInfo> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<ActiveWindowInfo>('active_window');
   }
-  return {
-    title: 'pain ai — Antigravity',
-    app: 'pain ai',
-    pid: 1234,
-    rect: { x: 0, y: 0, w: 1200, h: 800 },
-  };
+  throw new Error(`active_window unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function clipboardReadText(): Promise<ClipboardReadResult> {
@@ -251,10 +212,7 @@ export async function clipboardReadText(): Promise<ClipboardReadResult> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<ClipboardReadResult>('clipboard_read_text');
   }
-  return {
-    text: 'export interface MsgCode {\n  filename: string;\n  lang: string;\n  content: string;\n}',
-    length: 73,
-  };
+  throw new Error(`clipboard_read_text unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export interface VoiceItem {
@@ -280,6 +238,7 @@ export async function voiceSpeak(items: VoiceItem[]): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<void>('voice_speak', { items });
   }
+  throw new Error(`voice_speak unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function voiceStop(): Promise<number> {
@@ -287,7 +246,7 @@ export async function voiceStop(): Promise<number> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<number>('voice_stop');
   }
-  return 12;
+  throw new Error(`voice_stop unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function voiceRecordStart(): Promise<void> {
@@ -295,6 +254,7 @@ export async function voiceRecordStart(): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<void>('voice_record_start');
   }
+  throw new Error(`voice_record_start unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function voiceRecordStop(): Promise<RecordResult> {
@@ -302,23 +262,18 @@ export async function voiceRecordStop(): Promise<RecordResult> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<RecordResult>('voice_record_stop');
   }
-  return {
-    wav_path: 'mock/audio/rec_mock.wav',
-    duration_ms: 1200,
-  };
+  throw new Error(`voice_record_stop unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 
 export async function sttTranscribe(wavPath: string): Promise<SttResult> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<SttResult>('stt_transcribe', { wavPath });
+    const res = await invoke<SttResult>('stt_transcribe', { wavPath });
+    if (!res || (res as SttResult).ok === false) {
+      throw new Error((res as unknown as { message?: string })?.message || 'STT engine unavailable (STT_UNAVAILABLE)');
+    }
+    return res;
   }
-  return {
-    ok: true,
-    text: 'Inspect system status and run security verification.',
-    lang: 'en',
-    ms: 120,
-    engine: 'offline_fallback',
-  };
+  throw new Error(`stt_transcribe unavailable: ${DESKTOP_RUNTIME_REQUIRED}`);
 }
 

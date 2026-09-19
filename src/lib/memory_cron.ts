@@ -1,6 +1,10 @@
 /**
  * pain ai — Memory, Session Search, Cron, and Subagents Client API
  * Source of truth: PRD.md §4.3 + SKILL.md §10 + memory_cron.rs
+ *
+ * Phase 2: MOCK_* exports below are TEST FIXTURES ONLY (unit tests, Storybook).
+ * Production paths throw explicit errors on failure — they never present mock
+ * memory docs, sessions, or cron jobs as live data.
  */
 
 export interface MemoryDoc {
@@ -219,14 +223,10 @@ export const MOCK_CRON_JOBS: CronJob[] = [
 
 export async function memoryGet(target?: string): Promise<MemoryDoc> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<MemoryDoc>('memory_get', { target });
-    } catch (err) {
-      console.warn('memory_get invoke failed, falling back to mock:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<MemoryDoc>('memory_get', { target });
   }
-  return target?.toLowerCase().includes('user') ? MOCK_USER_DOC : MOCK_MEMORY_DOC;
+  throw new Error('memory_get unavailable: desktop runtime required (Tauri invoke unavailable).');
 }
 
 export async function memoryEdit(target: string, content: string): Promise<MemoryEditResult> {
@@ -245,30 +245,15 @@ export async function memoryEdit(target: string, content: string): Promise<Memor
       };
     }
   }
+  // Phase 2: explicit failure outside the desktop runtime — never a fake write.
   const limit = target.toLowerCase().includes('user') ? 1375 : 2200;
-  if (content.length > limit) {
-    return {
-      ok: false,
-      name: target.toLowerCase().includes('user') ? 'USER.md' : 'MEMORY.md',
-      path: '',
-      char_count: content.length,
-      char_limit: limit,
-      error: `Content length (${content.length} chars) exceeds hard limit of ${limit} characters.`,
-    };
-  }
-  if (target.toLowerCase().includes('user')) {
-    MOCK_USER_DOC.content = content;
-    MOCK_USER_DOC.char_count = content.length;
-  } else {
-    MOCK_MEMORY_DOC.content = content;
-    MOCK_MEMORY_DOC.char_count = content.length;
-  }
   return {
-    ok: true,
+    ok: false,
     name: target.toLowerCase().includes('user') ? 'USER.md' : 'MEMORY.md',
     path: '',
     char_count: content.length,
     char_limit: limit,
+    error: 'memory_edit unavailable: desktop runtime required (Tauri invoke unavailable).',
   };
 }
 
@@ -290,29 +275,21 @@ export async function sessionSearch(
       const data = await resp.json();
       if (Array.isArray(data.results)) return data.results as SessionSearchHit[];
     }
+    // Phase 2: sidecar unreachable or non-OK — honest empty, never hardcoded hits.
+    return [];
   } catch (err) {
-    console.warn('session_search sidecar fetch failed, falling back to mock:', err);
+    console.error('session_search sidecar fetch failed:', err);
+    // Phase 2: honest empty on transport failure, never hardcoded sessions.
+    return [];
   }
-  if (!query || !query.trim()) return MOCK_SEARCH_HITS;
-  const q = query.toLowerCase();
-  return MOCK_SEARCH_HITS.filter(
-    (h) =>
-      h.content.toLowerCase().includes(q) ||
-      h.session_title.toLowerCase().includes(q) ||
-      h.snippet.toLowerCase().includes(q)
-  );
 }
 
 export async function cronList(): Promise<CronJob[]> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<CronJob[]>('cron_list');
-    } catch (err) {
-      console.warn('cron_list invoke failed, falling back to mock:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<CronJob[]>('cron_list');
   }
-  return MOCK_CRON_JOBS;
+  throw new Error('cron_list unavailable: desktop runtime required.');
 }
 
 export async function cronCreate(
@@ -330,51 +307,23 @@ export async function cronCreate(
       delivery,
     });
   }
-  const newJob: CronJob = {
-    id: `job-${Date.now().toString(36)}`,
-    name,
-    schedule_nl: scheduleNl,
-    prompt,
-    delivery: 'in_app',
-    enabled: true,
-    interval_sec: 3600,
-    next_run: Date.now() + 120000,
-    created_at: Date.now(),
-    history: [],
-  };
-  MOCK_CRON_JOBS.unshift(newJob);
-  return newJob;
+  throw new Error('cron_create unavailable: desktop runtime required.');
 }
 
 export async function cronToggle(id: string, enabled: boolean): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('cron_toggle', { id, enabled });
-    } catch (err) {
-      console.warn('cron_toggle invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('cron_toggle', { id, enabled });
   }
-  const j = MOCK_CRON_JOBS.find((item) => item.id === id);
-  if (j) j.enabled = enabled;
-  return true;
+  throw new Error(`cron_toggle unavailable for '${id}': desktop runtime required.`);
 }
 
 export async function cronDelete(id: string): Promise<boolean> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('cron_delete', { id });
-    } catch (err) {
-      console.warn('cron_delete invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('cron_delete', { id });
   }
-  const idx = MOCK_CRON_JOBS.findIndex((item) => item.id === id);
-  if (idx >= 0) {
-    MOCK_CRON_JOBS.splice(idx, 1);
-    return true;
-  }
-  return false;
+  throw new Error(`cron_delete unavailable for '${id}': desktop runtime required.`);
 }
 
 export async function cronRunNow(id: string): Promise<CronRunRecord> {
@@ -382,50 +331,27 @@ export async function cronRunNow(id: string): Promise<CronRunRecord> {
     const { invoke } = await import('@tauri-apps/api/core');
     return await invoke<CronRunRecord>('cron_run_now', { id });
   }
-  const job = MOCK_CRON_JOBS.find((j) => j.id === id);
-  const now = Date.now();
-  const record: CronRunRecord = {
-    run_id: `run-${now.toString(36)}`,
-    timestamp: now,
-    status: 'success',
-    output: `Fired in-app reminder: ${job?.prompt || 'Task execution'}`,
-    scheduled_at: job?.next_run || now,
-    delta_sec: 1.2,
-  };
-  if (job) {
-    job.last_run = now;
-    job.history.unshift(record);
-    if (job.history.length > 5) job.history.pop();
-  }
-  return record;
+  throw new Error(`cron_run_now unavailable for '${id}': desktop runtime required.`);
 }
 
 export async function subagentConfigGet(): Promise<SubagentConfig> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<SubagentConfig>('subagent_config_get');
-    } catch (err) {
-      console.warn('subagent_config_get invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<SubagentConfig>('subagent_config_get');
   }
-  return { enabled: true, max_parallel: 3 };
+  throw new Error('subagent_config_get unavailable: desktop runtime required.');
 }
 
 export async function subagentConfigSet(enabled: boolean, maxParallel: number): Promise<SubagentConfig> {
   const safeParallel = Math.min(3, Math.max(1, maxParallel));
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<SubagentConfig>('subagent_config_set', {
-        enabled,
-        maxParallel: safeParallel,
-      });
-    } catch (err) {
-      console.warn('subagent_config_set invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<SubagentConfig>('subagent_config_set', {
+      enabled,
+      maxParallel: safeParallel,
+    });
   }
-  return { enabled, max_parallel: safeParallel };
+  throw new Error('subagent_config_set unavailable: desktop runtime required.');
 }
 
 export async function contextCompress(
@@ -434,25 +360,12 @@ export async function contextCompress(
   force?: boolean
 ): Promise<CompressResult> {
   if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<CompressResult>('context_compress', {
-        messagesJson,
-        contextLimit,
-        force,
-      });
-    } catch (err) {
-      console.warn('context_compress invoke failed:', err);
-    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<CompressResult>('context_compress', {
+      messagesJson,
+      contextLimit,
+      force,
+    });
   }
-  const charCount = messagesJson.length;
-  const origTokens = Math.max(1, Math.floor(charCount / 4));
-  const compressedTokens = Math.floor(origTokens / 3);
-  return {
-    compressed: true,
-    original_tokens: origTokens,
-    compressed_tokens: compressedTokens,
-    tokens_saved: origTokens - compressedTokens,
-    summary_snippet: '[CONTEXT COMPACTION SUMMARY] Prior turns summarized into compact context block.',
-  };
+  throw new Error('context_compress unavailable: desktop runtime required.');
 }

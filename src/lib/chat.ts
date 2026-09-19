@@ -179,7 +179,9 @@ export async function sendChat(
 }
 
 /**
- * Approve or deny a pending security gate action
+ * Approve or deny a pending security gate action.
+ * Phase 2: non-OK responses throw — callers (store.resolveApproval) surface
+ * the failure instead of silently dropping the operator decision.
  */
 export async function approveAction(
   approvalId: string,
@@ -190,7 +192,7 @@ export async function approveAction(
   const token = await getSidecarToken();
   const url = `http://127.0.0.1:${port}/v1/approve`;
 
-  await fetch(url, {
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -202,10 +204,16 @@ export async function approveAction(
       comment,
     }),
   });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Approve failed (HTTP ${resp.status}): ${errText || resp.statusText}`);
+  }
 }
 
 /**
- * Restart the sidecar process
+ * Restart the sidecar process.
+ * Phase 2: outside the desktop runtime there is no process to restart —
+ * throw instead of reporting a fabricated 'starting' status.
  */
 export async function restartSidecar(): Promise<SidecarStatusResponse> {
   if (isTauri()) {
@@ -213,12 +221,8 @@ export async function restartSidecar(): Promise<SidecarStatusResponse> {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<SidecarStatusResponse>('sidecar_restart');
     } catch {
-      // Continue to fallback
+      // Continue to explicit failure below
     }
   }
-  return {
-    status: 'starting',
-    port: DEFAULT_PORT,
-    restartCount: 0,
-  };
+  throw new Error('sidecar_restart unavailable: desktop runtime required.');
 }

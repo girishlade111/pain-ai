@@ -628,59 +628,21 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
     # Worker function running AIAgent.run_conversation in a separate thread
     def run_agent_turn():
         try:
-            # Check for simulated local/mock execution if no API key is provided
+            # Phase 2: no simulated/mock turns. A missing key for a keyed provider
+            # is an explicit error, never a canned success. Local providers
+            # (ollama/lmstudio/custom) proceed without a key.
             if not api_key and active_provider not in ("ollama", "lmstudio", "custom"):
-                # Handle test queries (e.g. "reply with hi", "list files in X") deterministically
-                query_lower = req.text.strip().lower()
-                if "reply with hi" in query_lower:
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put({"type": "token", "token": "Hello! I am pain ai, running via the Hermes engine."}),
-                        loop,
-                    )
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put({"type": "message_done", "content": "Hello! I am pain ai, running via the Hermes engine."}),
-                        loop,
-                    )
-                    return
-
-                if "list files" in query_lower:
-                    # Execute real directory listing using Hermes environment
-                    target_dir = BASE_DIR
-                    files = [f.name for f in target_dir.iterdir()][:15]
-                    result = f"Files in {target_dir.name}:\n" + "\n".join(f"- {f}" for f in files)
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put({"type": "tool_call", "name": "terminal", "args": {"command": "ls"}}),
-                        loop,
-                    )
-                    asyncio.run_coroutine_threadsafe(queue.put({"type": "token", "token": result}), loop)
-                    asyncio.run_coroutine_threadsafe(queue.put({"type": "message_done", "content": result}), loop)
-                    return
-
-                if "delete " in query_lower or "rm " in query_lower:
-                    # Trigger approval flow
-                    cmd = f"rm -rf {req.text.split()[-1]}"
-                    gateway_approval_notify({"command": cmd, "description": f"Delete target: {cmd}"})
-
-                    # Wait for operator decision (300s timeout)
-                    # The approval notify put the event on queue. We wait for resolve.
-                    for _ in range(600):
-                        if any(a.get("command") == cmd for a in approval_decisions.values()):
-                            break
-                        import time
-                        time.sleep(0.5)
-
-                    decision_info = next((v for v in approval_decisions.values() if v.get("command") == cmd), None)
-                    choice = decision_info.get("choice", "deny") if decision_info else "deny"
-
-                    if choice == "deny":
-                        denial_msg = f"Operation cancelled: '{cmd}' was denied by operator. File remains intact."
-                        asyncio.run_coroutine_threadsafe(queue.put({"type": "token", "token": denial_msg}), loop)
-                        asyncio.run_coroutine_threadsafe(queue.put({"type": "message_done", "content": denial_msg}), loop)
-                    else:
-                        allow_msg = f"Command '{cmd}' was approved by operator."
-                        asyncio.run_coroutine_threadsafe(queue.put({"type": "token", "token": allow_msg}), loop)
-                        asyncio.run_coroutine_threadsafe(queue.put({"type": "message_done", "content": allow_msg}), loop)
-                    return
+                missing_msg = (
+                    f"Provider '{active_provider}' requires an API key, but none is "
+                    "configured in the OS keychain. Open Settings → Providers, save "
+                    "your key, then retry. No agent turn was executed."
+                )
+                logger.warning(f"chat rejected (missing key): provider={active_provider}")
+                asyncio.run_coroutine_threadsafe(
+                    queue.put({"type": "error", "message": missing_msg}),
+                    loop,
+                )
+                return
 
             # Instantiate Hermes AIAgent with injected provider credentials
             agent_kwargs: Dict[str, Any] = {

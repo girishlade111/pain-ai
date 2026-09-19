@@ -147,6 +147,13 @@ pub const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
 static PENDING_APPROVALS: Mutex<Option<HashMap<String, PendingApproval>>> = Mutex::new(None);
 static TRUSTED_WORKSPACES: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 
+/// Phase 2: serializes rules-mutating unit tests. Parallel test threads share
+/// the on-disk rules.json; without this lock one test's load→push→save
+/// clobbers another's (flaky DENIED/POOR_TREE assertions) and leftover rules
+/// leak into the developer's real config. Each test restores its snapshot.
+#[cfg(test)]
+pub static TEST_RULES_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn get_appdata_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("APPDATA"))
