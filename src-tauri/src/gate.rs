@@ -155,6 +155,22 @@ static TRUSTED_WORKSPACES: Mutex<Option<HashMap<String, bool>>> = Mutex::new(Non
 pub static TEST_RULES_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn get_appdata_dir() -> PathBuf {
+    // Phase 4: ONE shared policy home for Rust + sidecar. Primary is
+    // $PAIN_AI_HOME, else ~/.pain-ai (USERPROFILE/HOME) — the same directory
+    // the sidecar uses (HERMES_HOME) for rules.json + audit.log, so both
+    // boundaries read/write one representation. Legacy LOCALAPPDATA/pain-ai
+    // installs migrate forward (see load_rules); saves always go primary.
+    if let Ok(home) = std::env::var("PAIN_AI_HOME") {
+        let p = PathBuf::from(home);
+        let _ = fs::create_dir_all(&p);
+        return p;
+    }
+    if let Ok(prof) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let mut p = PathBuf::from(prof);
+        p.push(".pain-ai");
+        let _ = fs::create_dir_all(&p);
+        return p;
+    }
     let base = std::env::var("LOCALAPPDATA")
         .or_else(|_| std::env::var("APPDATA"))
         .unwrap_or_else(|_| ".".into());
@@ -162,6 +178,16 @@ pub fn get_appdata_dir() -> PathBuf {
     p.push("pain-ai");
     let _ = fs::create_dir_all(&p);
     p
+}
+
+fn legacy_rules_path() -> Option<PathBuf> {
+    let base = std::env::var("LOCALAPPDATA")
+        .or_else(|_| std::env::var("APPDATA"))
+        .ok()?;
+    let mut p = PathBuf::from(base);
+    p.push("pain-ai");
+    p.push("rules.json");
+    Some(p)
 }
 
 pub fn rules_file_path() -> PathBuf {
@@ -183,6 +209,21 @@ pub fn load_rules() -> RuleStore {
             return store;
         }
     }
+    // Legacy installs kept rules under LOCALAPPDATA/pain-ai: adopt them once
+    // (unless the primary file exists but is corrupt — corrupt primary wins
+    // as empty rather than silently resurrecting legacy policy).
+    if !path.exists() {
+        if let Some(legacy) = legacy_rules_path() {
+            if legacy != path {
+                if let Ok(data) = fs::read_to_string(&legacy) {
+                    if let Ok(store) = serde_json::from_str::<RuleStore>(&data) {
+                        let _ = save_rules(&store);
+                        return store;
+                    }
+                }
+            }
+        }
+    }
     RuleStore::default()
 }
 
@@ -191,6 +232,41 @@ pub fn save_rules(store: &RuleStore) -> Result<(), String> {
     let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Redact key material from audit text. The audit log records WHAT was
+/// decided about WHICH target — never the secret itself.
+pub fn redact_secrets(text: &str) -> String {
+    let mut out = text.to_string();
+    // Prefix-style tokens: redact marker + trailing token chars.
+    for marker in ["sk-", "ghp_", "gho_", "xoxb-", "xoxa-", "xoxp-", "AIza"] {
+        loop {
+            let Some(start) = out.find(marker) else {
+                break;
+            };
+            let end = out[start..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+                .map(|offset| start + offset)
+                .unwrap_or(out.len());
+            out.replace_range(start..end, "[REDACTED]");
+        }
+    }
+    // PEM blocks: drop the base64 body, keep a shape marker.
+    loop {
+        let Some(begin) = out.find("-----BEGIN") else {
+            break;
+        };
+        if out[begin..].find("-----END").is_none() {
+            break;
+        }
+        // Find end of the -----END...----- line.
+        let end_line = out[begin..]
+            .find("-----END")
+            .and_then(|i| out[begin + i..].find('\n').map(|j| begin + i + j))
+            .unwrap_or(out.len());
+        out.replace_range(begin..end_line, "[REDACTED_PRIVATE_KEY]");
+    }
+    out
 }
 
 // Append entry to audit log (Never logs secret or file/clipboard content, only targets and outcomes)
@@ -204,11 +280,11 @@ pub fn append_audit_log(action: &Action, outcome_desc: &str, decision_desc: Opti
     let entry = serde_json::json!({
         "timestamp": timestamp,
         "kind": format!("{:?}", action.kind),
-        "target": action.target,
+        "target": redact_secrets(&action.target),
         "workspace": action.workspace,
         "app": action.app,
         "outcome": outcome_desc,
-        "decision": decision_desc,
+        "decision": decision_desc.map(redact_secrets),
     });
 
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {

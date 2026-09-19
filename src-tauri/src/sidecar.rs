@@ -129,14 +129,18 @@ impl SidecarManager {
             cmd.env("HERMES_HOME", pain_home.to_string_lossy().to_string());
         }
 
-        // Injected provider settings
+        // Injected provider settings (Phase 3: EFFECTIVE config — custom
+        // endpoint/model overrides honored, so the runtime matches Settings).
         let active_cfg = crate::providers::load_config();
         cmd.env("LSC_PROVIDER", &active_cfg.active);
-        cmd.env("LSC_MODEL", &active_cfg.target_model);
-
-        let providers = crate::providers::get_static_providers();
-        if let Some(p) = providers.iter().find(|pr| pr.id == active_cfg.active) {
-            cmd.env("LSC_BASE_URL", &p.base_url);
+        match crate::providers::effective_provider(&active_cfg.active, &active_cfg) {
+            Ok(eff) => {
+                cmd.env("LSC_MODEL", &eff.model);
+                cmd.env("LSC_BASE_URL", &eff.base_url);
+            }
+            Err(_) => {
+                cmd.env("LSC_MODEL", &active_cfg.target_model);
+            }
         }
 
         if let Ok(entry) = crate::providers::keyring_entry(&active_cfg.active) {

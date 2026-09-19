@@ -53,6 +53,8 @@ hiddenimports += [
     'sidecar.skills_manager',
     'sidecar.ui_tools',
     'sidecar.vision_util',
+    'sidecar.gate_policy',
+    'sidecar.capability_gate',
 ]
 
 a = Analysis(

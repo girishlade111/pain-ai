@@ -24,6 +24,22 @@ export interface PingResult {
   error?: string;
 }
 
+/**
+ * Phase 3: resolved provider view — static default + persisted Rust overrides.
+ * This drives the Settings grid; endpoint/model edits persist via
+ * setBaseUrl/resetBaseUrl (Rust providers.json), never React-only state.
+ */
+export interface EffectiveProvider {
+  id: string;
+  label: string;
+  baseURL: string;
+  auth: 'key' | 'none' | 'oauth-pending';
+  model: string;
+  modelsHint: string[];
+  description: string;
+  customized: boolean;
+}
+
 export const PROVIDERS: ProviderDef[] = [
   {
     id: 'openai',
@@ -210,6 +226,62 @@ export async function getProviderList(): Promise<ProviderDef[]> {
     }
   }
   return PROVIDERS;
+}
+
+/** Phase 3: resolved views for all providers (Rust overrides honored). */
+export async function getEffectiveProviders(): Promise<EffectiveProvider[]> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<EffectiveProvider[]>('provider_list_effective');
+  }
+  return PROVIDERS.map((p) => ({
+    id: p.id,
+    label: p.label,
+    baseURL: p.baseURL,
+    auth: p.auth,
+    model: p.modelsHint[0] || 'default',
+    modelsHint: p.modelsHint,
+    description: p.description,
+    customized: false,
+  }));
+}
+
+/** Phase 3: resolved view for one provider. */
+export async function getEffectiveProvider(providerId: string): Promise<EffectiveProvider> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<EffectiveProvider>('provider_get_effective', { providerId });
+  }
+  const p = PROVIDERS.find((item) => item.id === providerId);
+  if (!p) throw new Error(`Unknown provider '${providerId}'`);
+  return {
+    id: p.id,
+    label: p.label,
+    baseURL: p.baseURL,
+    auth: p.auth,
+    model: p.modelsHint[0] || 'default',
+    modelsHint: p.modelsHint,
+    description: p.description,
+    customized: false,
+  };
+}
+
+/** Phase 3: persist a custom base URL (validated in Rust; throws on invalid). */
+export async function setBaseUrl(providerId: string, baseUrl: string): Promise<EffectiveProvider> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<EffectiveProvider>('provider_set_base_url', { providerId, baseUrl });
+  }
+  throw new Error(`provider_set_base_url unavailable for '${providerId}': desktop runtime required.`);
+}
+
+/** Phase 3: drop the custom base URL override, restoring the default. */
+export async function resetBaseUrl(providerId: string): Promise<EffectiveProvider> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<EffectiveProvider>('provider_reset_base_url', { providerId });
+  }
+  throw new Error(`provider_reset_base_url unavailable for '${providerId}': desktop runtime required.`);
 }
 
 export async function getActiveConfig(): Promise<FallbackChain> {

@@ -10,6 +10,7 @@ import {
   type FallbackChain,
   type PingResult,
 } from '../lib/providers';
+import { restartSidecar } from '../lib/chat';
 
 export function ModelPicker() {
   const [open, setOpen] = useState(() => {
@@ -75,11 +76,28 @@ export function ModelPicker() {
     await setActiveProvider(id);
     const updated = await getActiveConfig();
     setConfig(updated);
+    // Phase 3: push the new provider into the live sidecar (controlled reload).
+    try {
+      await restartSidecar();
+    } catch (err) {
+      console.warn('Sidecar restart after provider switch failed:', err);
+    }
   };
+
+  // Phase 3: model text commits on blur/Enter (not per keystroke) so the
+  // controlled sidecar reload fires once per edit.
+  const [modelDraft, setModelDraft] = useState<string | null>(null);
 
   const handleModelChange = async (model: string) => {
     setConfig((prev) => ({ ...prev, targetModel: model }));
+    setModelDraft(null);
     await setTargetModel(model);
+    // Phase 3: push the new model into the live sidecar (controlled reload).
+    try {
+      await restartSidecar();
+    } catch (err) {
+      console.warn('Sidecar restart after model change failed:', err);
+    }
   };
 
   const handleRemoveFallback = async (id: string) => {
@@ -177,8 +195,21 @@ export function ModelPicker() {
             <div className="flex space-x-2">
               <input
                 type="text"
-                value={config.targetModel}
-                onChange={(e) => handleModelChange(e.target.value)}
+                value={modelDraft ?? config.targetModel}
+                onChange={(e) => {
+                  setModelDraft(e.target.value);
+                }}
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (modelDraft !== null && v) {
+                    handleModelChange(v);
+                  } else {
+                    setModelDraft(null);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                }}
                 placeholder="e.g. gpt-4o"
                 className="flex-1 h-8 px-2.5 bg-surface-dark-elevated text-on-dark font-sans text-[13px] rounded border border-surface-dark-soft focus:outline-none focus:border-primary"
               />

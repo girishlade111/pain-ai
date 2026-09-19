@@ -62,9 +62,13 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             providers::provider_list,
+            providers::provider_list_effective,
+            providers::provider_get_effective,
             providers::provider_get_active,
             providers::provider_set_active,
             providers::provider_set_target_model,
+            providers::provider_set_base_url,
+            providers::provider_reset_base_url,
             providers::provider_set_fallbacks,
             providers::key_set,
             providers::key_status,
