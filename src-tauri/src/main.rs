@@ -9,6 +9,7 @@ mod common;
 mod context;
 mod doctor;
 mod gate;
+mod outputs;
 mod providers;
 mod sidecar;
 mod skills;
@@ -56,6 +57,7 @@ fn stt_transcribe(wav_path: String) -> Result<audio::SttResult, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             context::start_active_window_poller(app.handle().clone());
             Ok(())
@@ -126,6 +128,12 @@ fn main() {
             memory_cron::context_compress,
             memory_cron::subagent_config_get,
             memory_cron::subagent_config_set,
+            outputs::output_get_config,
+            outputs::output_set_default,
+            outputs::output_reset_default,
+            outputs::output_pick_folder,
+            outputs::output_resolve,
+            outputs::output_open_path,
             chibi::chibi_show,
             chibi::chibi_hide,
             chibi::chibi_set_size,

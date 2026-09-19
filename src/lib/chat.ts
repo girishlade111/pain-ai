@@ -17,11 +17,18 @@ export interface SidecarStatusResponse {
   restartCount: number;
 }
 
+export interface ChatArtifact {
+  path: string;
+  absolutePath: string;
+  type: string;
+  size: number;
+}
+
 export interface ChatCallbacks {
   onToken: (token: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onApprovalRequest?: (item: PendingApprovalItem) => void;
-  onDone: (content: string) => void;
+  onDone: (content: string, artifacts?: ChatArtifact[]) => void;
   onError: (error: string) => void;
 }
 
@@ -94,7 +101,8 @@ export async function sendChat(
   text: string,
   callbacks: ChatCallbacks,
   workspace: string = 'pain-ai',
-  port: number = DEFAULT_PORT
+  port: number = DEFAULT_PORT,
+  outputDir?: string | null
 ): Promise<void> {
   const token = await getSidecarToken();
   const url = `http://127.0.0.1:${port}/v1/chat`;
@@ -110,6 +118,7 @@ export async function sendChat(
         session_id: sessionId,
         text,
         workspace,
+        ...(outputDir ? { output_dir: outputDir } : {}),
       }),
     });
 
@@ -162,7 +171,10 @@ export async function sendChat(
                 createdAt: data.createdAt || Date.now(),
               });
             } else if (data.type === 'message_done') {
-              callbacks.onDone(data.content);
+              callbacks.onDone(
+                data.content,
+                Array.isArray(data.artifacts) ? (data.artifacts as ChatArtifact[]) : undefined
+              );
             } else if (data.type === 'error') {
               callbacks.onError(data.message);
             }

@@ -110,6 +110,12 @@ try:
         check as gate_check,
         persist_allow as gate_persist_allow,
     )
+    from output_manager import (
+        diff_artifacts as output_diff_artifacts,
+        resolve_artifact_path as output_resolve_artifact,
+        resolve_output_dir as output_resolve_dir,
+        snapshot_dir as output_snapshot_dir,
+    )
     from capability_gate import (
         DecisionStash,
         blocked_result as gate_blocked_result,
@@ -127,6 +133,12 @@ except ImportError:
         append_audit_log as gate_audit,
         check as gate_check,
         persist_allow as gate_persist_allow,
+    )
+    from sidecar.output_manager import (
+        diff_artifacts as output_diff_artifacts,
+        resolve_artifact_path as output_resolve_artifact,
+        resolve_output_dir as output_resolve_dir,
+        snapshot_dir as output_snapshot_dir,
     )
     from sidecar.capability_gate import (
         DecisionStash,
@@ -218,6 +230,9 @@ class ChatRequest(BaseModel):
     text: str
     attachments: Optional[List[Dict[str, Any]]] = None
     workspace: Optional[str] = None
+    # Phase 5: P1 explicit output path for generated artifacts (validated,
+    # never silently redirected). None -> configured default -> exports/.
+    output_dir: Optional[str] = None
 
 
 class ApproveRequest(BaseModel):
@@ -921,6 +936,25 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
         _turn_context.queue = queue
         _turn_context.loop = loop
         try:
+            # Phase 5: resolve the output directory FIRST (explicit >
+            # configured default > exports/ fallback). Broken paths are an
+            # explicit error — the turn never runs against a redirected dir.
+            try:
+                output_path, output_source = output_resolve_dir(req.output_dir)
+            except ValueError as exc:
+                logger.warning(f"output dir rejected: {exc}")
+                asyncio.run_coroutine_threadsafe(
+                    queue.put({"type": "error",
+                               "message": f"Output directory unavailable: {exc}"}),
+                    loop,
+                )
+                return
+            output_before = output_snapshot_dir(output_path)
+            task_text = (
+                f"[Task output directory: {output_path} (source: {output_source}). "
+                "Save every file you generate for this task under that directory, "
+                "creating subfolders as needed.]\n\n" + req.text
+            )
             # Phase 2: no simulated/mock turns. A missing key for a keyed provider
             # is an explicit error, never a canned success. Local providers
             # (ollama/lmstudio/custom) proceed without a key.
@@ -959,7 +993,7 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
 
             # Run the conversation turn
             result = agent.run_conversation(
-                user_message=req.text,
+                user_message=task_text,
                 stream_callback=stream_callback,
             )
 
@@ -970,8 +1004,19 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
             elif isinstance(result, str):
                 final_text = result
 
+            # Phase 5: structured artifact records for files created under the
+            # output directory during this turn.
+            try:
+                artifacts = output_diff_artifacts(output_path, output_before)
+            except Exception as exc:
+                logger.warning(f"artifact diff failed: {exc}")
+                artifacts = []
+
             asyncio.run_coroutine_threadsafe(
-                queue.put({"type": "message_done", "content": final_text}),
+                queue.put({"type": "message_done", "content": final_text,
+                           "artifacts": artifacts,
+                           "output_dir": str(output_path),
+                           "output_source": output_source}),
                 loop,
             )
 

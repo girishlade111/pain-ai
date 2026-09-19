@@ -1,6 +1,7 @@
 import type { Msg } from '../store';
 import { CodeCard } from './CodeCard';
 import { SpikeMark } from './SpikeMark';
+import { ArtifactCard } from './ArtifactCard';
 
 export interface ChatMessageProps {
   message: Msg;
@@ -51,6 +52,13 @@ export function ChatMessage({ message }: ChatMessageProps) {
             lang={message.code.lang}
             content={message.code.content}
           />
+        </div>
+      )}
+
+      {/* Generated artifacts (if present) */}
+      {message.artifacts && message.artifacts.length > 0 && (
+        <div className="w-full">
+          <ArtifactCard artifacts={message.artifacts} />
         </div>
       )}
     </div>

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { PendingApprovalItem } from './components/ApprovalCard';
-import { sendChat, approveAction, type SidecarStatus } from './lib/chat';
+import { sendChat, approveAction, type SidecarStatus, type ChatArtifact } from './lib/chat';
 import { splitSentences } from './lib/segment';
+import type { OutputConfig } from './lib/outputs';
 
 export interface MsgCode {
   filename: string;
@@ -15,6 +16,7 @@ export interface Msg {
   headline?: string;
   body: string;
   code?: MsgCode;
+  artifacts?: ChatArtifact[];
 }
 
 // Phase 2: no seeded conversation or approvals in production. The thread starts
@@ -140,6 +142,10 @@ interface AppState {
   setChibiVisible: (visible: boolean) => void;
   setChibiSize: (size: ChibiSize) => void;
   triggerChibiReaction: () => void;
+  outputConfig: OutputConfig | null;
+  outputExplicit: string | null;
+  setOutputExplicit: (dir: string | null) => void;
+  refreshOutputConfig: () => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -168,6 +174,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   tokenUsage: { used: 0, limit: 128000 },
   subagentConfig: { enabled: true, maxParallel: 3 },
   trustModal: null,
+  outputConfig: null,
+  outputExplicit: null,
+
+  setOutputExplicit: (outputExplicit) => set({ outputExplicit }),
+  refreshOutputConfig: async () => {
+    try {
+      const { outputGetConfig } = await import('./lib/outputs');
+      const outputConfig = await outputGetConfig();
+      set({ outputConfig });
+    } catch (err) {
+      console.warn('[OUTPUT CONFIG LOAD FAILED]', err);
+    }
+  },
 
   setDraft: (draft) => set({ draft }),
   setMemoryNudge: (memoryNudge) => set({ memoryNudge }),
@@ -273,8 +292,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const nextMessages = [...get().messages, userMsg, pendingAgentMsg];
     set({ messages: nextMessages, draft: '' });
 
-    // Stream from sidecar
+    // Stream from sidecar (Phase 5: explicit P1 output dir when chosen;
+    // otherwise the bridge resolves configured default → exports/).
     const sessionId = get().currentSessionId;
+    const outputDir = get().outputExplicit ?? undefined;
     let accumulatedBody = '';
 
     sendChat(
@@ -304,7 +325,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         onApprovalRequest: (item) => {
           get().enqueueApproval(item);
         },
-        onDone: (finalContent) => {
+        onDone: (finalContent, artifacts) => {
           const finalText = finalContent || accumulatedBody || 'Task completed.';
           set((state) => ({
             messages: state.messages.map((m) =>
@@ -313,6 +334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                     ...m,
                     body: finalText,
                     headline: undefined,
+                    ...(artifacts && artifacts.length > 0 ? { artifacts } : {}),
                   }
                 : m
             ),
@@ -338,7 +360,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             ),
           }));
         },
-      }
+      },
+      undefined,
+      undefined,
+      outputDir
     );
   },
 

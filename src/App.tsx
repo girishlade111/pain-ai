@@ -15,6 +15,7 @@ import { DiffView } from './components/DiffView';
 import { UiPreview } from './components/UiPreview';
 import { ScreenView } from './components/ScreenView';
 import { CaptionBar } from './components/CaptionBar';
+import { OutputBar } from './components/OutputBar';
 import { Chibi } from './components/Chibi';
 import { Skills } from './pages/Skills';
 import { Connectors } from './pages/Connectors';
@@ -60,6 +61,11 @@ export function App() {
   } = useAppStore();
 
   const threadEndRef = useRef<HTMLDivElement>(null);
+
+  // Load persisted output directory (Phase 5) once at startup.
+  useEffect(() => {
+    useAppStore.getState().refreshOutputConfig().catch(() => {});
+  }, []);
 
   // Handle test view parameters (?view=empty, ?mobile=open, ?view=settings, ?view=approval-high, ?view=approval-settings, ?view=trust, ?view=ui-tree, ?view=ui-fallback)
   // Phase 2: demo/fixture injections are DEV-ONLY. Production builds skip them
@@ -650,6 +656,7 @@ export function App() {
               {/* Sticky Bottom Composer & Synchronized Caption Bar */}
               <div className="w-full bg-canvas/90 backdrop-blur-xs border-t border-hairline-soft px-4 py-3 select-none">
                 <div className="max-w-[820px] w-full mx-auto">
+                  <OutputBar />
                   {captionState && (
                     <CaptionBar
                       fullText={captionState.fullText}
