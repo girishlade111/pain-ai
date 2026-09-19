@@ -117,8 +117,6 @@ fn main() {
             skills::learn_drafts_list,
             skills::learn_draft_approve,
             skills::learn_draft_reject,
-            memory_cron::memory_get,
-            memory_cron::memory_edit,
             memory_cron::cron_list,
             memory_cron::cron_create,
             memory_cron::cron_toggle,

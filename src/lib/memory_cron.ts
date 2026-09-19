@@ -221,40 +221,58 @@ export const MOCK_CRON_JOBS: CronJob[] = [
   },
 ];
 
+const SIDECAR_BASE = 'http://127.0.0.1:48293';
+
 export async function memoryGet(target?: string): Promise<MemoryDoc> {
-  if (isTauri()) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<MemoryDoc>('memory_get', { target });
+  // Phase 7: Hermes native memory via the sidecar (MemoryStore-backed
+  // /v1/memory). The Rust duplicate is removed; this is the only read path.
+  const params = new URLSearchParams();
+  if (target) params.set('target', target);
+  try {
+    const resp = await fetch(`${SIDECAR_BASE}/v1/memory?${params.toString()}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) {
+      throw new Error(`memory_get failed (HTTP ${resp.status})`);
+    }
+    return (await resp.json()) as MemoryDoc;
+  } catch (err) {
+    throw new Error(`memory unavailable: ${err}`);
   }
-  throw new Error('memory_get unavailable: desktop runtime required (Tauri invoke unavailable).');
 }
 
 export async function memoryEdit(target: string, content: string): Promise<MemoryEditResult> {
-  if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<MemoryEditResult>('memory_edit', { target, content });
-    } catch (err: any) {
+  // Phase 7: whole-file saves map onto native entry ops server-side
+  // (atomic batch; refusals surface verbatim in `error`).
+  try {
+    const resp = await fetch(`${SIDECAR_BASE}/v1/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, content }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const body = (await resp.json()) as MemoryEditResult;
+    if (!resp.ok) {
       return {
         ok: false,
-        name: target,
-        path: '',
+        name: body?.name || target,
+        path: body?.path || '',
         char_count: content.length,
-        char_limit: target.toLowerCase().includes('user') ? 1375 : 2200,
-        error: err.toString(),
+        char_limit: body?.char_limit || (target.toLowerCase().includes('user') ? 1375 : 2200),
+        error: body?.error || `memory_edit failed (HTTP ${resp.status})`,
       };
     }
+    return body;
+  } catch (err: any) {
+    return {
+      ok: false,
+      name: target,
+      path: '',
+      char_count: content.length,
+      char_limit: target.toLowerCase().includes('user') ? 1375 : 2200,
+      error: `memory unavailable: ${err?.toString() || err}`,
+    };
   }
-  // Phase 2: explicit failure outside the desktop runtime — never a fake write.
-  const limit = target.toLowerCase().includes('user') ? 1375 : 2200;
-  return {
-    ok: false,
-    name: target.toLowerCase().includes('user') ? 'USER.md' : 'MEMORY.md',
-    path: '',
-    char_count: content.length,
-    char_limit: limit,
-    error: 'memory_edit unavailable: desktop runtime required (Tauri invoke unavailable).',
-  };
 }
 
 export async function sessionSearch(

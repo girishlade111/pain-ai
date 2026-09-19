@@ -1,18 +1,18 @@
-//! pain ai — Memory, Session Search, Cron, and Subagents Host IPC (memory_cron.rs)
+//! pain ai — Session Search, Cron, and Subagents Host IPC (memory_cron.rs)
 //!
-//! SSOT OWNERSHIP (Phase 1):
-//! - Agent execution / memory semantics / tools: Hermes Agent (vendored, untouched).
-//!   Hermes natives: tools/memory_tool.py (MemoryStore 2200/1375), tools/session_search_tool.py,
-//!   agent/context_compressor.py, tools/delegate_tool*.py, cron/*.
-//! - Desktop memory/cron IPC boundary: this file (thin JSON-file adapter over
-//!   ~/.pain-ai/{memories,cron/jobs.json,delegation.json}).
+//! SSOT OWNERSHIP (Phase 1, completed Phase 7):
+//! - Long-term memory (MEMORY.md / USER.md): Hermes native MemoryStore
+//!   (tools/memory_tool.py + memory_tool_store.py), served to the UI through
+//!   the sidecar (`sidecar/memory_manager.py` thin adapter → GET/POST
+//!   /v1/memory). The former Rust memory_get/memory_edit duplicates were
+//!   removed after proving parity (whole-file edits map onto native atomic
+//!   entry batches; native budget/lock/drift/threat guards intact).
+//! - Agent execution / tools: Hermes Agent (vendored, untouched).
 //! - Session FTS + NL schedule parsing + compression: sidecar/*.py are authoritative
-//!   for the HTTP transport (session_search.py SQLite FTS5, cron_manager.parse_schedule_nl,
-//!   compressor.py). This file mirrors that logic for Tauri invoke only; on divergence,
-//!   sidecar wins and this file must be updated to match.
+//!   for the HTTP transport. This file mirrors cron parse logic for Tauri
+//!   invoke only; on divergence, sidecar wins.
 //!
 //! Provides Tauri commands for:
-//! - Long-term memory inspection and editing (`memory_get`, `memory_edit`)
 //! - FTS5 session search retrieval (`session_search` — delegates to sidecar; no mock data)
 //! - In-app cron job management (`cron_list`, `cron_create`, `cron_toggle`, `cron_delete`, `cron_run_now`)
 //! - Context window compression (`context_compress` — desktop estimate; authoritative: sidecar/compressor.py)
@@ -27,30 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 pub mod memory_cron_tests;
 
-pub const MEMORY_CHAR_LIMIT: usize = 2200;
-pub const USER_CHAR_LIMIT: usize = 1375;
 pub const MAX_PARALLEL_CAP: usize = 3;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryDocDto {
-    pub name: String,
-    pub target: String,
-    pub path: String,
-    pub content: String,
-    pub char_count: usize,
-    pub char_limit: usize,
-    pub within_limit: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryEditResultDto {
-    pub ok: bool,
-    pub name: String,
-    pub path: String,
-    pub char_count: usize,
-    pub char_limit: usize,
-    pub error: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSearchHitDto {
@@ -191,91 +168,9 @@ pub fn parse_schedule_nl_mirror(schedule_nl: &str, now: f64) -> (f64, Option<f64
 }
 
 // --- Tauri Commands ---
-
-#[tauri::command]
-pub async fn memory_get(target: Option<String>) -> Result<MemoryDocDto, String> {
-    let home = get_pain_ai_home();
-    let mem_dir = home.join("memories");
-    let _ = fs::create_dir_all(&mem_dir);
-
-    let is_user = target.as_deref().map(|t| t.to_lowercase().contains("user")).unwrap_or(false);
-    let (name, limit, path) = if is_user {
-        ("USER.md", USER_CHAR_LIMIT, mem_dir.join("USER.md"))
-    } else {
-        ("MEMORY.md", MEMORY_CHAR_LIMIT, mem_dir.join("MEMORY.md"))
-    };
-
-    let content = if path.exists() {
-        fs::read_to_string(&path).unwrap_or_default()
-    } else {
-        let def = if is_user {
-            "# User Profile & Preferences\n\n- Role: Primary system operator\n- Tone: Concise, technical, and precise\n".to_string()
-        } else {
-            "# Long-Term Memory Notes\n\n- System: pain-ai desktop assistant initialized.\n- Mode: Local-first fail-closed security gate active.\n".to_string()
-        };
-        let _ = fs::write(&path, &def);
-        def
-    };
-
-    let count = content.chars().count();
-    Ok(MemoryDocDto {
-        name: name.to_string(),
-        target: if is_user { "user".to_string() } else { "memory".to_string() },
-        path: path.to_string_lossy().to_string(),
-        content,
-        char_count: count,
-        char_limit: limit,
-        within_limit: count <= limit,
-    })
-}
-
-#[tauri::command]
-pub async fn memory_edit(target: String, content: String) -> Result<MemoryEditResultDto, String> {
-    let home = get_pain_ai_home();
-    let mem_dir = home.join("memories");
-    let _ = fs::create_dir_all(&mem_dir);
-
-    let is_user = target.to_lowercase().contains("user");
-    let (name, limit, path) = if is_user {
-        ("USER.md", USER_CHAR_LIMIT, mem_dir.join("USER.md"))
-    } else {
-        ("MEMORY.md", MEMORY_CHAR_LIMIT, mem_dir.join("MEMORY.md"))
-    };
-
-    let char_count = content.chars().count();
-    if char_count > limit {
-        return Ok(MemoryEditResultDto {
-            ok: false,
-            name: name.to_string(),
-            path: path.to_string_lossy().to_string(),
-            char_count,
-            char_limit: limit,
-            error: Some(format!(
-                "Content length ({} chars) exceeds hard limit of {} characters for {}.",
-                char_count, limit, name
-            )),
-        });
-    }
-
-    match fs::write(&path, &content) {
-        Ok(_) => Ok(MemoryEditResultDto {
-            ok: true,
-            name: name.to_string(),
-            path: path.to_string_lossy().to_string(),
-            char_count,
-            char_limit: limit,
-            error: None,
-        }),
-        Err(e) => Ok(MemoryEditResultDto {
-            ok: false,
-            name: name.to_string(),
-            path: path.to_string_lossy().to_string(),
-            char_count,
-            char_limit: limit,
-            error: Some(e.to_string()),
-        }),
-    }
-}
+// NOTE (Phase 7): memory_get/memory_edit were removed. Long-term memory is
+// Hermes native MemoryStore, served via sidecar GET/POST /v1/memory; the
+// frontend uses that transport exclusively.
 
 #[tauri::command]
 pub async fn cron_list() -> Result<Vec<CronJobDto>, String> {

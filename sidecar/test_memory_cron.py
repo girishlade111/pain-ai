@@ -14,12 +14,17 @@ import time
 import pytest
 from pathlib import Path
 
-# Add project root and fixtures to sys.path
+# Add project root, hermes-agent (native memory), and fixtures to sys.path
 root_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root_dir / "sidecar"))
+sys.path.insert(0, str(root_dir / "hermes-agent"))
 sys.path.insert(0, str(root_dir / "tests" / "fixtures"))
 
-from memory_manager import MemoryManager, MEMORY_CHAR_LIMIT, USER_CHAR_LIMIT
+from memory_manager import (
+    MemoryManager,
+    MEMORY_CHAR_LIMIT,
+    USER_CHAR_LIMIT,
+)
 from session_search import StateDB
 from cron_manager import CronManager, parse_schedule_nl
 from compressor import ContextCompressor, estimate_messages_tokens
@@ -72,10 +77,23 @@ def test_200_session_search_latency_under_500ms(tmp_path):
     assert len(results) > 0
 
 
-def test_memory_character_limits_and_restart_persistence(tmp_path):
-    """Acceptance: Memory caps enforced and edits persist across restart."""
-    mem_dir = tmp_path / "memories"
-    mgr = MemoryManager(mem_dir)
+def _isolated_home(monkeypatch, tmp_path):
+    """Point Hermes at a scratch home (native store resolves per call)."""
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    return home
+
+
+def test_memory_character_limits_and_restart_persistence(tmp_path, monkeypatch):
+    """Acceptance: Memory caps enforced and edits persist across restart.
+
+    Phase 7: runs against Hermes native MemoryStore through the adapter.
+    Whole-file writes normalize (entries are stripped §-delimited segments),
+    so assertions compare normalized text.
+    """
+    _isolated_home(monkeypatch, tmp_path)
+    mgr = MemoryManager()
 
     # 1. Test MEMORY.md character limit (2200 cap)
     valid_content = "Durable facts:\n" + ("- fact line\n" * 50)
@@ -98,12 +116,65 @@ def test_memory_character_limits_and_restart_persistence(tmp_path):
     assert res_user_bad["ok"] is False
     assert "exceeds hard limit" in res_user_bad["error"]
 
-    # 3. Simulate sidecar restart (new MemoryManager reading the same disk dir)
-    mgr_restarted = MemoryManager(mem_dir)
+    # 3. Simulate sidecar restart (fresh adapter reading the same Hermes home)
+    mgr_restarted = MemoryManager()
     loaded_mem = mgr_restarted.get_memory("memory")
-    assert loaded_mem["content"] == valid_content
+    assert loaded_mem["content"] == valid_content.strip()
+    assert loaded_mem["within_limit"] is True
+    assert loaded_mem["char_limit"] == MEMORY_CHAR_LIMIT
     loaded_user = mgr_restarted.get_memory("user")
-    assert loaded_user["content"] == valid_user
+    assert loaded_user["content"] == valid_user.strip()
+
+
+def test_memory_caps_match_hermes_native_defaults():
+    """Parity pin: adapter caps must equal Hermes MemoryStore defaults."""
+    from tools.memory_tool_store import MemoryStore
+
+    assert MEMORY_CHAR_LIMIT == MemoryStore().memory_char_limit == 2200
+    assert USER_CHAR_LIMIT == MemoryStore().user_char_limit == 1375
+
+
+def test_memory_edit_replace_and_remove_entries(tmp_path, monkeypatch):
+    """Native entry ops through whole-file edits: add, replace, remove."""
+    _isolated_home(monkeypatch, tmp_path)
+    mgr = MemoryManager()
+
+    base = "Alpha fact\n§\nBeta fact\n§\nGamma fact"
+    assert mgr.update_memory("memory", base)["ok"] is True
+    assert mgr.get_memory("memory")["content"] == base
+
+    # Replace one entry by editing its text.
+    edited = "Alpha fact\n§\nBeta fact v2\n§\nGamma fact"
+    assert mgr.update_memory("memory", edited)["ok"] is True
+    assert "Beta fact v2" in mgr.get_memory("memory")["content"]
+
+    # Remove one entry.
+    reduced = "Alpha fact\n§\nGamma fact"
+    assert mgr.update_memory("memory", reduced)["ok"] is True
+    content = mgr.get_memory("memory")["content"]
+    assert "Beta" not in content and "Alpha fact" in content
+
+    # Whole-file clear of a non-empty store works via deliberate single removes.
+    assert mgr.update_memory("memory", "   ")["ok"] is True
+    assert mgr.get_memory("memory")["content"] == ""
+
+
+def test_memory_external_drift_surfaces_honestly(tmp_path, monkeypatch):
+    """An externally appended over-limit entry trips the native drift guard
+    (with .bak snapshot) instead of being silently discarded."""
+    home = _isolated_home(monkeypatch, tmp_path)
+    mgr = MemoryManager()
+    assert mgr.update_memory("memory", "Seed fact")["ok"] is True
+
+    # External writer appends a single entry over the whole-file limit.
+    mem_file = home / "memories" / "MEMORY.md"
+    with open(mem_file, "a", encoding="utf-8") as fh:
+        fh.write("\n§\n" + "Z" * (MEMORY_CHAR_LIMIT + 10))
+
+    res = mgr.update_memory("memory", "Seed fact\n§\nAnother fact")
+    assert res["ok"] is False
+    assert "round-trip" in res["error"] or "drift" in res["error"].lower()
+    assert list(home.glob("memories/MEMORY.md.bak.*")), "drift backup expected"
 
 
 def test_cron_in_app_delivery_and_platform_refusal(tmp_path):

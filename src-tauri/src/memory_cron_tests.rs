@@ -1,12 +1,13 @@
-//! pain ai — Unit Tests for Memory, Cron, and Subagents IPC (memory_cron_tests.rs)
+//! pain ai — Unit Tests for Cron and Subagents IPC (memory_cron_tests.rs)
+//!
+//! NOTE (Phase 7): long-term memory is Hermes native MemoryStore (sidecar
+//! adapter + test_memory_cron.py). The former Rust char-limit test was removed
+//! with the duplicate implementation; limits are pinned by the Hermes parity
+//! test in Python.
+
+// PHASE 7: memory limits live in Hermes MemoryStore; nothing to assert here.
 
 use super::*;
-
-#[test]
-fn test_memory_character_limits_constants() {
-    assert_eq!(MEMORY_CHAR_LIMIT, 2200);
-    assert_eq!(USER_CHAR_LIMIT, 1375);
-}
 
 #[test]
 fn test_platform_delivery_strictly_rejected() {
