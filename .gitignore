@@ -1,59 +1,38 @@
 # Dependency directories
 node_modules/
-node_modules
+dist/
 
-# Python / Virtual Environment
+# Rust / Tauri
+src-tauri/target/
+target/
+
+# Python / Sidecar
+sidecar/.venv/
+sidecar/dist/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 .venv/
-*.venv
-
-# Build and Output Directories
-dist/
-build/
-out/
-target/
-*.egg-info/
-.eggs/
-
-# IDE and Editor Files
-.vscode/
-.idea/
-*.swp
-*.swo
-.kilo/
+venv/
 
 # Environment and Secret Files
-.env
-.env.local
-.env.*.local
+.env*
+*key*
+*secret*
 *.pem
-*.key
-secrets.json
+
+# AI Models
+*.onnx
 
 # OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Logs
+# Logs & Cache
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Database & Cache
 *.sqlite3
 *.db
 *.db-journal
 *.db-wal
 state.db
+*.pdb

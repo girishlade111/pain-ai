@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+PackageIdentifier: LadeStack.pain-ai
+PackageVersion: 1.0.0
+DefaultLocale: en-US
+Publisher: LadeStack
+PublisherUrl: https://ladestack.in
+PublisherSupportUrl: https://github.com/ladestack/pain-ai/issues
+PackageName: pain ai
+PackageUrl: https://github.com/ladestack/pain-ai
+License: MIT
+LicenseUrl: https://github.com/ladestack/pain-ai/blob/main/LICENSE
+Copyright: Copyright (c) 2026 Girish Lade, LadeStack
+ShortDescription: Local-first, cross-platform desktop AI agent with native GUI automation, voice captions, and permission gates.
+Description: |
+  pain ai (CLI alias: lsc) is a local-first, cross-platform personal AI agent.
+  It features:
+  - Claude-grade native GUI shell with dark/light trinity theme
+  - Native Windows UI Automation (UIA) desktop control
+  - Voice STT input with simultaneous TTS voice output and captions
+  - Granular, immutable permission gating (deny > ask > allow)
+  - Persistent SQLite FTS5 memory and natural-language cron scheduling
+  - 2D companion overlay with real-time FSM sprite animation
+Moniker: lsc
+Tags:
+  - ai
+  - agent
+  - assistant
+  - automation
+  - desktop
+  - uia
+  - local-first
+ReleaseNotesUrl: https://github.com/ladestack/pain-ai/releases/tag/v1.0.0
+Installers:
+  - Architecture: x64
+    InstallerType: nullsoft
+    InstallerUrl: https://github.com/ladestack/pain-ai/releases/download/v1.0.0/pain-ai_1.0.0_x64-setup.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    Scope: user
+    InstallModes:
+      - silent
+      - interactive
+    InstallerSwitches:
+      Silent: /S
+      SilentWithProgress: /S
+    UpgradeBehavior: install
+ManifestType: singleton
+ManifestVersion: 1.6.0

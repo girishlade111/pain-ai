@@ -1,0 +1,28 @@
+[package]
+name = "pain-ai"
+version = "0.1.0"
+description = "pain ai - LadeStack Companion"
+authors = ["Girish Lade"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+keyring = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+uiautomation = "0.25"
+enigo = "0.6"
+xcap = "0.9"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
+arboard = "3"
+active-win-pos-rs = "0.11"
+hound = "3.5"
+rodio = "0.19"
+cpal = "0.15"
+

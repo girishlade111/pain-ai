@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "pain ai",
+  "version": "1.0.0",
+  "identifier": "in.ladestack.painai",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "pain ai",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      },
+      {
+        "label": "chibi",
+        "title": "pain ai companion",
+        "url": "index.html?view=chibi",
+        "width": 220,
+        "height": 260,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true,
+        "focus": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-capability"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi", "deb", "appimage"],
+    "externalBin": ["binaries/engine"],
+    "resources": [
+      "../src/assets/chibi.png",
+      "../src/assets/chibi.json"
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldSY3A2Y0t4NnEvZzRjSStnK05hR1k4Q0pBNDl5a2Z2R254Ukp6YWRmME1OaG1OdlpXUFlrWlIK",
+      "endpoints": [
+        "https://github.com/ladestack/pain-ai/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

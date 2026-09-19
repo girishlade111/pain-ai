@@ -1,0 +1,62 @@
+import type { Config } from "tailwindcss";
+import { spacing, rounded } from "./src/theme/tokens";
+
+export default {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        primary: "var(--c-primary)",
+        "primary-active": "var(--c-primary-active)",
+        "primary-disabled": "var(--c-primary-disabled)",
+        "accent-teal": "var(--c-accent-teal)",
+        "accent-amber": "var(--c-accent-amber)",
+        canvas: "var(--c-canvas)",
+        "surface-soft": "var(--c-surface-soft)",
+        "surface-card": "var(--c-surface-card)",
+        "surface-cream-strong": "var(--c-surface-cream-strong)",
+        "surface-dark": "var(--c-surface-dark)",
+        "surface-dark-elevated": "var(--c-surface-dark-elevated)",
+        "surface-dark-soft": "var(--c-surface-dark-soft)",
+        hairline: "var(--c-hairline)",
+        "hairline-soft": "var(--c-hairline-soft)",
+        ink: "var(--c-ink)",
+        "body-strong": "var(--c-body-strong)",
+        body: "var(--c-body)",
+        muted: "var(--c-muted)",
+        "muted-soft": "var(--c-muted-soft)",
+        "on-primary": "var(--c-on-primary)",
+        "on-dark": "var(--c-on-dark)",
+        "on-dark-soft": "var(--c-on-dark-soft)",
+        success: "var(--c-success)",
+        warning: "var(--c-warning)",
+        error: "var(--c-error)",
+      },
+      spacing: {
+        xxs: spacing.xxs,
+        xs: spacing.xs,
+        sm: spacing.sm,
+        md: spacing.md,
+        lg: spacing.lg,
+        xl: spacing.xl,
+        xxl: spacing.xxl,
+        section: spacing.section,
+      },
+      borderRadius: {
+        xs: rounded.xs,
+        sm: rounded.sm,
+        md: rounded.md,
+        lg: rounded.lg,
+        xl: rounded.xl,
+        pill: rounded.pill,
+        full: rounded.full,
+      },
+      fontFamily: {
+        display: ['"Cormorant Garamond"', "Tiempos Headline", "Garamond", '"Times New Roman"', "serif"],
+        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", '"Segoe UI"', "Roboto", "sans-serif"],
+        code: ['"JetBrains Mono"', "monospace"],
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;

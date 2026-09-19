@@ -1,0 +1,34 @@
+============================================================
+ pain ai — System Diagnostics (lsc doctor)
+ Platform: Windows 11 (x64) | Path: Terminal Script (install.ps1)
+============================================================
+
+ [PASS]  Sidecar Health & Version
+        Detail: Sidecar asset found at C:\Users\Girish Lade\AppData\Local\pain-ai\binaries\engine-x86_64-pc-windows-msvc.exe (v1.0.0, sha: e2168f7136cf)
+
+ [PASS]  GUI Automation Subsystem (Windows UIA)
+        Detail: Windows UIAutomationCore.dll active at C:\WINDOWS\System32\UIAutomationCore.dll
+
+ [PASS]  OS Keychain Credential Store
+        Detail: OS Credential Store active (Windows Credential Manager / Secret Service)
+
+ [PASS]  Permission Rules & Trust Store
+        Detail: Default in-memory rule store active (deny > ask > allow precedence, 12 blocklists)
+
+ [PASS]  Active LLM Provider
+        Detail: Configured provider: ollama [Key: encrypted in OS keychain or local endpoint]
+
+ [PASS]  Disk Space & Binary Signatures
+        Detail: Storage volume writable (>500MB free); Updater verification key configured
+
+ [PASS]  Antivirus Quarantine Probe
+        Detail: Sidecar binary is readable and unquarantined (no Defender/AV locks detected)
+
+------------------------------------------------------------
+ Diagnostics Summary: 7 checks total
+ Passed: 7 | Warnings: 0 | Failed: 0
+============================================================
+Result: ALL GREEN (0 exit code)
+Timestamp: 2026-09-19T01:40:30Z
+Install Duration: 18.6s
+MinGit Provisioned: Yes (%LOCALAPPDATA%\pain-ai\git)

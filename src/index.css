@@ -1,0 +1,303 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand & Accent */
+  --c-primary: #cc785c;
+  --c-primary-active: #a9583e;
+  --c-primary-disabled: #e6dfd8;
+  --c-accent-teal: #5db8a6;
+  --c-accent-amber: #e8a55a;
+
+  /* Surface */
+  --c-canvas: #faf9f5;
+  --c-surface-soft: #f5f0e8;
+  --c-surface-card: #efe9de;
+  --c-surface-cream-strong: #e8e0d2;
+  --c-surface-dark: #181715;
+  --c-surface-dark-elevated: #252320;
+  --c-surface-dark-soft: #1f1e1b;
+  --c-hairline: #e6dfd8;
+  --c-hairline-soft: #ebe6df;
+
+  /* Text */
+  --c-ink: #141413;
+  --c-body-strong: #252523;
+  --c-body: #3d3d3a;
+  --c-muted: #6c6a64;
+  --c-muted-soft: #8e8b82;
+  --c-on-primary: #ffffff;
+  --c-on-dark: #faf9f5;
+  --c-on-dark-soft: #a09d96;
+
+  /* Semantic */
+  --c-success: #5db872;
+  --c-warning: #d4a017;
+  --c-error: #c64545;
+}
+
+body {
+  margin: 0;
+  background-color: var(--c-canvas);
+  color: var(--c-ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display {
+  font-family: 'Cormorant Garamond', Tiempos Headline, Garamond, 'Times New Roman', serif;
+}
+
+.font-code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Component Utility Classes (CSS Variables only) */
+.btn-primary {
+  background-color: var(--c-primary);
+  color: var(--c-on-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 12px 20px;
+  height: 40px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+}
+
+.btn-primary:active {
+  background-color: var(--c-primary-active);
+}
+
+.btn-primary:disabled {
+  background-color: var(--c-primary-disabled);
+  color: var(--c-muted-soft);
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background-color: var(--c-canvas);
+  color: var(--c-ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 12px 20px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--c-hairline);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+}
+
+.btn-secondary:hover {
+  background-color: var(--c-surface-soft);
+}
+
+.btn-secondary:active {
+  background-color: var(--c-surface-cream-strong);
+}
+
+.btn-on-dark {
+  background-color: var(--c-surface-dark-elevated);
+  color: var(--c-on-dark);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 10px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--c-surface-dark-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+}
+
+.btn-on-dark:hover {
+  background-color: var(--c-surface-dark-soft);
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: var(--c-canvas);
+  border: 1px solid var(--c-hairline);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-ink);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.icon-btn:hover {
+  background-color: var(--c-surface-soft);
+}
+
+.icon-btn:active {
+  background-color: var(--c-surface-cream-strong);
+}
+
+.input {
+  background-color: var(--c-canvas);
+  color: var(--c-ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  border-radius: 8px;
+  padding: 10px 14px;
+  height: 40px;
+  border: 1px solid var(--c-hairline);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input:focus {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px rgba(204, 120, 92, 0.15);
+}
+
+.card {
+  background-color: var(--c-surface-card);
+  border-radius: 12px;
+  padding: 32px;
+  border: 1px solid var(--c-hairline-soft);
+}
+
+.code-card {
+  background-color: var(--c-surface-dark);
+  border-radius: 12px;
+  padding: 24px;
+  border: 1px solid var(--c-surface-dark-elevated);
+  color: var(--c-on-dark);
+}
+
+.pill {
+  background-color: var(--c-surface-card);
+  color: var(--c-ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  border-radius: 9999px;
+  padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Responsive Overrides (<768px) */
+@media (max-width: 768px) {
+  .display-xl,
+  h1.display-xl {
+    font-size: 32px !important;
+    line-height: 1.1 !important;
+    letter-spacing: -0.5px !important;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* P11c: Chibi Companion Overlay Sprite Keyframes & Drag Styles                */
+/* -------------------------------------------------------------------------- */
+
+[data-tauri-drag-region] {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+[data-tauri-drag-region]:active {
+  cursor: grabbing;
+}
+
+.chibi-sprite {
+  --chibi-w: 128px;
+  --chibi-h: 128px;
+  --chibi-sheet-w: 512px;
+  --chibi-sheet-h: 512px;
+  width: var(--chibi-w);
+  height: var(--chibi-h);
+  background-image: url('./assets/chibi.png');
+  background-repeat: no-repeat;
+  background-size: var(--chibi-sheet-w) var(--chibi-sheet-h);
+  image-rendering: pixelated;
+}
+
+.chibi-size-s {
+  --chibi-w: 96px;
+  --chibi-h: 96px;
+  --chibi-sheet-w: 384px;
+  --chibi-sheet-h: 384px;
+}
+
+.chibi-size-m {
+  --chibi-w: 128px;
+  --chibi-h: 128px;
+  --chibi-sheet-w: 512px;
+  --chibi-sheet-h: 512px;
+}
+
+.chibi-size-l {
+  --chibi-w: 160px;
+  --chibi-h: 160px;
+  --chibi-sheet-w: 640px;
+  --chibi-sheet-h: 640px;
+}
+
+/* Row 0: Idle (4 frames across) - 1.6s loop */
+@keyframes chibiIdle {
+  from {
+    background-position: 0px 0px;
+  }
+  to {
+    background-position: calc(var(--chibi-w) * -4) 0px;
+  }
+}
+
+.chibi-idle {
+  animation: chibiIdle 1.6s steps(4) infinite;
+}
+
+/* Row 1: Talk (4 frames across) - 0.5s loop */
+@keyframes chibiTalk {
+  from {
+    background-position: 0px calc(var(--chibi-h) * -1);
+  }
+  to {
+    background-position: calc(var(--chibi-w) * -4) calc(var(--chibi-h) * -1);
+  }
+}
+
+.chibi-talk {
+  animation: chibiTalk 0.5s steps(4) infinite;
+}
+
+/* Row 2: React (2 frames across) - 0.8s once */
+@keyframes chibiReact {
+  from {
+    background-position: 0px calc(var(--chibi-h) * -2);
+  }
+  to {
+    background-position: calc(var(--chibi-w) * -2) calc(var(--chibi-h) * -2);
+  }
+}
+
+.chibi-react {
+  animation: chibiReact 0.8s steps(2) forwards;
+}
+
+
