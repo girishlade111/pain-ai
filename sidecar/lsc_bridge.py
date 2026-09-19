@@ -116,6 +116,10 @@ try:
         resolve_output_dir as output_resolve_dir,
         snapshot_dir as output_snapshot_dir,
     )
+    from artifact_store import build_group as artifact_build_group
+    from artifact_store import get_group as artifact_get_group
+    from artifact_store import list_groups as artifact_list_groups
+    from artifact_store import record_group as artifact_record_group
     from capability_gate import (
         DecisionStash,
         blocked_result as gate_blocked_result,
@@ -140,6 +144,10 @@ except ImportError:
         resolve_output_dir as output_resolve_dir,
         snapshot_dir as output_snapshot_dir,
     )
+    from sidecar.artifact_store import build_group as artifact_build_group
+    from sidecar.artifact_store import get_group as artifact_get_group
+    from sidecar.artifact_store import list_groups as artifact_list_groups
+    from sidecar.artifact_store import record_group as artifact_record_group
     from sidecar.capability_gate import (
         DecisionStash,
         blocked_result as gate_blocked_result,
@@ -603,6 +611,20 @@ async def get_mcp_tools(workspace: Optional[str] = None):
     return {"tools": mgr_mcp_get_active_tools(workspace=workspace)}
 
 
+# --- Artifact Tracking Endpoints (Phase 6) ---
+@app.get("/v1/artifacts")
+async def get_artifacts(session_id: Optional[str] = None, limit: int = 50):
+    return {"groups": artifact_list_groups(session_id=session_id, limit=limit)}
+
+
+@app.get("/v1/artifacts/{group_id}")
+async def get_artifact_group(group_id: str):
+    group = artifact_get_group(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail=f"Artifact group '{group_id}' not found")
+    return {"group": group}
+
+
 # --- Memory Endpoints ---
 class MemoryEditRequest(BaseModel):
     target: str = "memory"
@@ -836,6 +858,7 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
     verify_bearer_token(authorization)
 
     session_id = req.session_id.strip() or "default"
+    task_id = f"turn-{uuid.uuid4().hex[:12]}"
     queue: asyncio.Queue = asyncio.Queue()
     session_event_queues[session_id] = queue
 
@@ -1005,16 +1028,37 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
                 final_text = result
 
             # Phase 5: structured artifact records for files created under the
-            # output directory during this turn.
+            # output directory during this turn. Phase 6: verified group
+            # record (existence + metadata re-checked; unverifiable paths
+            # excluded, group degrades to partial, never faked) persisted to
+            # the artifact store.
             try:
-                artifacts = output_diff_artifacts(output_path, output_before)
+                detected = output_diff_artifacts(output_path, output_before)
+                rels = [a.get("path", "") for a in detected if a.get("path")]
             except Exception as exc:
                 logger.warning(f"artifact diff failed: {exc}")
-                artifacts = []
+                rels = []
+            group = None
+            if rels:
+                try:
+                    group = artifact_build_group(output_path, rels, session_id, task_id)
+                    try:
+                        artifact_record_group(group)
+                    except Exception as exc:
+                        logger.warning(f"artifact persist failed: {exc}")
+                except ValueError as exc:
+                    logger.warning(f"no verifiable artifacts: {exc}")
+                    group = None
+            artifacts = group["files"] if group else []
 
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "message_done", "content": final_text,
+                           "task_id": task_id,
                            "artifacts": artifacts,
+                           "group": ({"id": group["id"], "root": group["root"],
+                                      "kind": group["kind"], "status": group["status"],
+                                      "taskId": group["taskId"],
+                                      "count": len(group["files"])} if group else None),
                            "output_dir": str(output_path),
                            "output_source": output_source}),
                 loop,

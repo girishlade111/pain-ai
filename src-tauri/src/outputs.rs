@@ -402,14 +402,15 @@ pub fn output_resolve(requested: Option<String>) -> Result<ResolvedOutput, Strin
     resolve_output_dir(&home, requested.as_deref())
 }
 
-/// Open a file/folder with the OS shell. Strictly contained to the effective
-/// output directory: anything outside is an explicit error, never redirected.
-#[tauri::command]
-pub fn output_open_path(path: String) -> Result<(), String> {
-    let home = get_appdata_dir();
-    let effective = resolve_output_dir(&home, None)?;
+/// Validate an open/reveal target: absolute, inside the effective output
+/// directory, and existing. Pure (no spawning) so headless tests can cover it.
+pub fn validate_open_target(home: &Path, path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("Path must not be empty".to_string());
+    }
+    let effective = resolve_output_dir(home, None)?;
     let root = canonical_strict(Path::new(&effective.dir))?;
-    let target = canonical_strict(Path::new(&path))?;
+    let target = canonical_strict(Path::new(path.trim()))?;
     if !target.starts_with(&root) {
         return Err(format!(
             "Refusing to open '{}': outside the output directory '{}'",
@@ -420,15 +421,22 @@ pub fn output_open_path(path: String) -> Result<(), String> {
     if !target.exists() {
         return Err(format!("Path does not exist: '{}'", target.display()));
     }
+    Ok(target)
+}
+
+/// Open a file/folder with the OS shell. Strictly contained to the effective
+/// output directory: anything outside is an explicit error, never redirected.
+/// Files launch with the associated app; directories open in the file manager.
+#[tauri::command]
+pub fn output_open_path(path: String) -> Result<(), String> {
+    let home = get_appdata_dir();
+    let target = validate_open_target(&home, &path)?;
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = std::process::Command::new("explorer");
-        if target.is_file() {
-            cmd.arg("/select,").arg(&target);
-        } else {
-            cmd.arg(&target);
-        }
-        cmd.spawn().map_err(|e| format!("Failed to open '{}': {}", target.display(), e))?;
+        std::process::Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("Failed to open '{}': {}", target.display(), e))?;
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
@@ -437,6 +445,38 @@ pub fn output_open_path(path: String) -> Result<(), String> {
             .arg(&target)
             .spawn()
             .map_err(|e| format!("Failed to open '{}': {}", target.display(), e))?;
+        Ok(())
+    }
+}
+
+/// Reveal a file/folder in the file manager (Explorer `/select`, else open
+/// the containing folder). Same containment gate as `output_open_path`.
+#[tauri::command]
+pub fn output_reveal_path(path: String) -> Result<(), String> {
+    let home = get_appdata_dir();
+    let target = validate_open_target(&home, &path)?;
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        if target.is_file() {
+            cmd.arg("/select,").arg(&target);
+        } else {
+            cmd.arg(&target);
+        }
+        cmd.spawn().map_err(|e| format!("Failed to reveal '{}': {}", target.display(), e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = if target.is_file() {
+            target.parent().map(|p| p.to_path_buf()).unwrap_or(target.clone())
+        } else {
+            target.clone()
+        };
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("Failed to reveal '{}': {}", target.display(), e))?;
         Ok(())
     }
 }

@@ -134,6 +134,7 @@ fn main() {
             outputs::output_pick_folder,
             outputs::output_resolve,
             outputs::output_open_path,
+            outputs::output_reveal_path,
             chibi::chibi_show,
             chibi::chibi_hide,
             chibi::chibi_set_size,

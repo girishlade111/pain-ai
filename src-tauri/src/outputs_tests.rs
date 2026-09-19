@@ -160,3 +160,36 @@ fn test_artifact_type_mapping() {
         assert_eq!(artifact_type_for(Path::new(ext)), kind, "{}", ext);
     }
 }
+
+#[test]
+fn test_open_and_reveal_gates_share_containment() {
+    // validate_open_target (used by BOTH output_open_path and
+    // output_reveal_path) is hermetic over the passed home; only the final
+    // OS spawn is excluded headless.
+    let home = temp_home("open-gate");
+    let out = home.join("out");
+    fs::create_dir_all(&out).unwrap();
+    save_output_config(
+        &home,
+        &OutputConfig {
+            default_dir: Some(out.to_string_lossy().to_string()),
+            last_dir: None,
+        },
+    )
+    .unwrap();
+    let f = out.join("a.txt");
+    fs::write(&f, b"hi").unwrap();
+    // Inside + exists validates.
+    assert!(validate_open_target(&home, f.to_str().unwrap()).is_ok());
+    // Outside the effective root is refused.
+    let outside = home.join("evil.txt");
+    fs::write(&outside, b"x").unwrap();
+    let err = validate_open_target(&home, outside.to_str().unwrap()).unwrap_err();
+    assert!(err.contains("outside the output directory"));
+    // Missing target is refused.
+    let ghost = out.join("ghost.txt");
+    assert!(validate_open_target(&home, ghost.to_str().unwrap()).is_err());
+    // Empty is refused.
+    assert!(validate_open_target(&home, "   ").is_err());
+    let _ = fs::remove_dir_all(&home);
+}

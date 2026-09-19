@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { PendingApprovalItem } from './components/ApprovalCard';
-import { sendChat, approveAction, type SidecarStatus, type ChatArtifact } from './lib/chat';
+import { sendChat, approveAction, type SidecarStatus, type ChatArtifact, type ChatArtifactGroup } from './lib/chat';
 import { splitSentences } from './lib/segment';
 import type { OutputConfig } from './lib/outputs';
 
@@ -17,6 +17,7 @@ export interface Msg {
   body: string;
   code?: MsgCode;
   artifacts?: ChatArtifact[];
+  artifactGroup?: ChatArtifactGroup | null;
 }
 
 // Phase 2: no seeded conversation or approvals in production. The thread starts
@@ -325,7 +326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         onApprovalRequest: (item) => {
           get().enqueueApproval(item);
         },
-        onDone: (finalContent, artifacts) => {
+        onDone: (finalContent, artifacts, group) => {
           const finalText = finalContent || accumulatedBody || 'Task completed.';
           set((state) => ({
             messages: state.messages.map((m) =>
@@ -335,6 +336,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                     body: finalText,
                     headline: undefined,
                     ...(artifacts && artifacts.length > 0 ? { artifacts } : {}),
+                    ...(group ? { artifactGroup: group } : {}),
                   }
                 : m
             ),

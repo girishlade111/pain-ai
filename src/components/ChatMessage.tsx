@@ -58,7 +58,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       {/* Generated artifacts (if present) */}
       {message.artifacts && message.artifacts.length > 0 && (
         <div className="w-full">
-          <ArtifactCard artifacts={message.artifacts} />
+          <ArtifactCard artifacts={message.artifacts} group={message.artifactGroup} />
         </div>
       )}
     </div>

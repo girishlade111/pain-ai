@@ -58,3 +58,9 @@ export async function outputOpenPath(path: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   return await invoke<void>('output_open_path', { path });
 }
+
+/** Reveal a file/folder in the file manager (Explorer/File Manager). */
+export async function outputRevealPath(path: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return await invoke<void>('output_reveal_path', { path });
+}

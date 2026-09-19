@@ -18,17 +18,34 @@ export interface SidecarStatusResponse {
 }
 
 export interface ChatArtifact {
+  id?: string;
+  sessionId?: string;
+  taskId?: string;
+  filename?: string;
   path: string;
   absolutePath: string;
+  relativePath?: string;
   type: string;
   size: number;
+  createdAt?: number;
+  modifiedAt?: number;
+  status?: string;
+}
+
+export interface ChatArtifactGroup {
+  id: string;
+  root: string;
+  kind: string;
+  status: 'completed' | 'partial';
+  taskId: string;
+  count: number;
 }
 
 export interface ChatCallbacks {
   onToken: (token: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onApprovalRequest?: (item: PendingApprovalItem) => void;
-  onDone: (content: string, artifacts?: ChatArtifact[]) => void;
+  onDone: (content: string, artifacts?: ChatArtifact[], group?: ChatArtifactGroup | null) => void;
   onError: (error: string) => void;
 }
 
@@ -173,7 +190,8 @@ export async function sendChat(
             } else if (data.type === 'message_done') {
               callbacks.onDone(
                 data.content,
-                Array.isArray(data.artifacts) ? (data.artifacts as ChatArtifact[]) : undefined
+                Array.isArray(data.artifacts) ? (data.artifacts as ChatArtifact[]) : undefined,
+                (data.group as ChatArtifactGroup | null) ?? null
               );
             } else if (data.type === 'error') {
               callbacks.onError(data.message);
