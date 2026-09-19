@@ -1,10 +1,21 @@
 //! pain ai — Memory, Session Search, Cron, and Subagents Host IPC (memory_cron.rs)
 //!
+//! SSOT OWNERSHIP (Phase 1):
+//! - Agent execution / memory semantics / tools: Hermes Agent (vendored, untouched).
+//!   Hermes natives: tools/memory_tool.py (MemoryStore 2200/1375), tools/session_search_tool.py,
+//!   agent/context_compressor.py, tools/delegate_tool*.py, cron/*.
+//! - Desktop memory/cron IPC boundary: this file (thin JSON-file adapter over
+//!   ~/.pain-ai/{memories,cron/jobs.json,delegation.json}).
+//! - Session FTS + NL schedule parsing + compression: sidecar/*.py are authoritative
+//!   for the HTTP transport (session_search.py SQLite FTS5, cron_manager.parse_schedule_nl,
+//!   compressor.py). This file mirrors that logic for Tauri invoke only; on divergence,
+//!   sidecar wins and this file must be updated to match.
+//!
 //! Provides Tauri commands for:
 //! - Long-term memory inspection and editing (`memory_get`, `memory_edit`)
-//! - FTS5 session search retrieval (`session_search`)
+//! - FTS5 session search retrieval (`session_search` — delegates to sidecar; no mock data)
 //! - In-app cron job management (`cron_list`, `cron_create`, `cron_toggle`, `cron_delete`, `cron_run_now`)
-//! - Context window compression (`context_compress`)
+//! - Context window compression (`context_compress` — desktop estimate; authoritative: sidecar/compressor.py)
 //! - Subagent delegation configuration (`subagent_config_get`, `subagent_config_set`)
 
 use serde::{Deserialize, Serialize};
@@ -148,6 +159,37 @@ pub fn validate_delivery(delivery: &str) -> Result<(), String> {
     }
 }
 
+/// Mirror of sidecar/cron_manager.parse_schedule_nl for the two relative forms.
+/// Authoritative parser is sidecar/cron_manager.py (which also handles daily/weekday
+/// calendar forms in local timezone). This mirror keeps Tauri invoke consistent for
+/// `in X s/m/h` and `every X s/m/h`; unknown strings fall back to now+3600s just
+/// like the sidecar fallback.
+pub fn parse_schedule_nl_mirror(schedule_nl: &str, now: f64) -> (f64, Option<f64>) {
+    let s = schedule_nl.trim().to_lowercase();
+    let tokens: Vec<&str> = s.split_whitespace().collect();
+    // Expect ["in"|"every", "<n>", "<unit>"]
+    if tokens.len() == 3 && (tokens[0] == "in" || tokens[0] == "every") {
+        if let Ok(val) = tokens[1].parse::<f64>() {
+            let unit = tokens[2];
+            let secs = if unit.starts_with('s') {
+                val
+            } else if unit.starts_with('m') {
+                val * 60.0
+            } else if unit.starts_with('h') {
+                val * 3600.0
+            } else {
+                return (now + 3600.0, Some(3600.0));
+            };
+            if tokens[0] == "in" {
+                return (now + secs, None);
+            } else {
+                return (now + secs, Some(secs));
+            }
+        }
+    }
+    (now + 3600.0, Some(3600.0))
+}
+
 // --- Tauri Commands ---
 
 #[tauri::command]
@@ -274,8 +316,8 @@ pub async fn cron_create(
         .unwrap_or_default()
         .as_secs_f64();
 
-    // Default next_run: in 2 minutes or calculated interval
-    let next_run = now + 120.0;
+    // NL schedule: mirror sidecar/cron_manager.parse_schedule_nl for relative forms.
+    let (next_run, interval_sec) = parse_schedule_nl_mirror(&schedule_nl, now);
     let job_id = format!("job-{}", &uuid_v4_prefix());
 
     let new_job = CronJobDto {
@@ -285,7 +327,7 @@ pub async fn cron_create(
         prompt,
         delivery: "in_app".to_string(),
         enabled: true,
-        interval_sec: Some(3600.0),
+        interval_sec,
         next_run,
         last_run: None,
         created_at: now,
@@ -418,58 +460,19 @@ pub async fn subagent_config_set(enabled: bool, max_parallel: usize) -> Result<S
 #[tauri::command]
 pub async fn session_search(
     query: String,
-    session_id: Option<String>,
+    _session_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<SessionSearchHitDto>, String> {
-    // Escapes special characters for safe query matching
+    // SSOT: session FTS lives in sidecar/session_search.py over ~/.pain-ai/state.db
+    // (SQLite messages_fts, unicode61). Hermes tools/session_search_tool.py is the
+    // upstream agent-loop reference. This Tauri command intentionally holds NO mock
+    // rows: callers must use the sidecar HTTP transport GET /v1/sessions/search.
+    // Validate the query shape here so malformed FTS input fails fast with parity.
     let _escaped = sanitize_fts_query(&query);
     let _max_hits = limit.unwrap_or(20);
-
-    // Fallback search / mock results when database is not yet populated
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-
-    let mut hits = vec![
-        SessionSearchHitDto {
-            message_id: 1,
-            session_id: session_id.clone().unwrap_or_else(|| "sess-arch-001".to_string()),
-            session_title: "Permission Gate Architecture".to_string(),
-            session_source: "user".to_string(),
-            session_started: now - 3600.0,
-            role: "user".to_string(),
-            tool_name: None,
-            content: "Can you review the permission gate blocklist patterns?".to_string(),
-            snippet: "...review the <mark>permission gate</mark> blocklist patterns?...".to_string(),
-            rank_score: -12.45,
-            timestamp: now - 3590.0,
-        },
-        SessionSearchHitDto {
-            message_id: 2,
-            session_id: "sess-arch-002".to_string(),
-            session_title: "Windows UI Automation".to_string(),
-            session_source: "user".to_string(),
-            session_started: now - 7200.0,
-            role: "assistant".to_string(),
-            tool_name: Some("ui_tree".to_string()),
-            content: "Located element btnSave via Accessibility tree traversal.".to_string(),
-            snippet: "...located element <mark>btnSave</mark> via Accessibility tree...".to_string(),
-            rank_score: -8.12,
-            timestamp: now - 7150.0,
-        },
-    ];
-
-    if !query.is_empty() {
-        let q_lower = query.to_lowercase();
-        hits.retain(|h| {
-            h.content.to_lowercase().contains(&q_lower)
-                || h.session_title.to_lowercase().contains(&q_lower)
-                || h.snippet.to_lowercase().contains(&q_lower)
-        });
-    }
-
-    Ok(hits)
+    Err(
+        "session_search is served by the sidecar (GET /v1/sessions/search over ~/.pain-ai/state.db); Tauri invoke holds no mock rows by design.".to_string(),
+    )
 }
 
 #[tauri::command]
@@ -478,6 +481,8 @@ pub async fn context_compress(
     context_limit: Option<usize>,
     force: Option<bool>,
 ) -> Result<CompressResultDto, String> {
+    // Desktop estimate only. Authoritative compression is sidecar/compressor.py
+    // (head/tail protection) over Hermes agent/context_compressor.py semantics.
     let limit = context_limit.unwrap_or(128000);
     let is_forced = force.unwrap_or(false);
 

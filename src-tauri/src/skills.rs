@@ -1,5 +1,14 @@
 //! pain ai — Skills System & MCP Connectors Host IPC (skills.rs)
 //!
+//! SSOT OWNERSHIP (Phase 1):
+//! - Agent skills semantics / execution: Hermes Agent (skills/, agent/curator*, tools/).
+//! - Sidecar Hub catalog / trust records / drafts: sidecar/skills_manager.py
+//!   (trusted_skills.json, lock.json, skill-drafts/) + sidecar/quarantine.py scanner.
+//! - Desktop install gate + IPC boundary: this file. Quarantine patterns here mirror
+//!   gate.rs blocklists; MCP catalog below mirrors sidecar/mcp_manager.CATALOG_SERVERS
+//!   for Tauri invoke. On divergence, sidecar wins for HTTP transport, gate.rs wins
+//!   for security policy.
+//!
 //! Provides Tauri commands for:
 //! - Progressive disclosure skill discovery (`skills_list`, `skill_view`)
 //! - Workspace skill trust-gating (`skills_trust`)
@@ -584,6 +593,9 @@ pub fn skills_remove(name: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn mcp_list(_workspace: Option<String>) -> Result<Vec<McpServerDto>, String> {
+    // Desktop IPC mirror of sidecar/mcp_manager.CATALOG_SERVERS (authoritative for
+    // HTTP transport). Kept in sync by ID (filesystem/echo/github/notion); live
+    // per-workspace enablement + OAuth/API-key state live in the sidecar config.
     Ok(vec![
         McpServerDto {
             id: "filesystem".into(),
@@ -682,6 +694,9 @@ pub fn mcp_tools(_workspace: Option<String>) -> Result<Vec<McpToolDto>, String> 
 
 #[tauri::command]
 pub fn learn_drafts_list() -> Result<Vec<LearnDraftDto>, String> {
+    // SSOT: /learn drafts live in sidecar/skills_manager.DRAFTS_DIR via HTTP
+    // GET /v1/learn/drafts. This invoke returns empty until the desktop adopts
+    // the sidecar-backed draft flow (Phase 2); no mock drafts by design.
     Ok(vec![])
 }
 

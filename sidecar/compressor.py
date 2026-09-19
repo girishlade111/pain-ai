@@ -1,5 +1,8 @@
 """pain ai — Context Window Compressor (/compress + auto-compaction)
 Source of truth: PRD.md §4.3 + hermes-map.md §6 + agent/context_compressor.py
+SSOT (Phase 1): This module owns sidecar HTTP compression (head/tail protect).
+Hermes agent/context_compressor.py owns upstream loop semantics; Rust
+memory_cron.context_compress is a desktop estimate only.
 """
 
 from typing import List, Dict, Any, Tuple

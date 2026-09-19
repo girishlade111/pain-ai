@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+// SSOT (Phase 1): Provider credential storage (OS keychain) + persistent
+// configuration (providers.json) owner is this file. Sidecar receives
+// LSC_PROVIDER/BASE_URL/MODEL/API_KEY env copies per spawn; frontend
+// SettingsProviders/ModelPicker are views only.
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

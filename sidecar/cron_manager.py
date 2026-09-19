@@ -1,5 +1,8 @@
 """pain ai — Natural Language Cron Subsystem & In-App Scheduler
 Source of truth: PRD.md §4.3 + hermes-map.md §9 + cron/
+SSOT (Phase 1): parse_schedule_nl here owns NL parsing for HTTP transport;
+Rust memory_cron.parse_schedule_nl_mirror mirrors the `in/every X` relative
+forms for Tauri invoke. Hermes cron/* owns upstream scheduler semantics.
 """
 
 import json

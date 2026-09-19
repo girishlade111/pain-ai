@@ -16,25 +16,16 @@ use uiautomation::UIAutomation;
 #[cfg(windows)]
 use enigo::{Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
 
+pub use crate::common::{RectDto, UiResult};
+#[allow(unused_imports)]
+pub use crate::common::to_physical;
 use crate::gate::{check, load_rules, Action, ActionKind, Outcome};
 
 // -----------------------------------------------------------------------------
 // Data Structures
 // -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RectDto {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
-
-impl RectDto {
-    pub fn center(&self) -> (i32, i32) {
-        (self.x + self.w / 2, self.y + self.h / 2)
-    }
-}
+// SSOT: RectDto / UiResult / to_physical live in crate::common.
+// Node / CaptureResult remain GUI-module owners (Windows UIA twin of atspi.rs).
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
@@ -55,29 +46,9 @@ pub struct CaptureResult {
     pub scale_factor: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiResult<T> {
-    pub ok: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    pub code: Option<String>,
-    pub hint: Option<String>,
-    pub hit_type: Option<String>, // "tree" | "fallback"
-}
-
 // -----------------------------------------------------------------------------
-// DPI Scale Helper
+// DPI Scale Helper (SSOT: crate::common::to_physical, re-exported above)
 // -----------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub fn to_physical(rect: &RectDto, scale_factor: f64) -> RectDto {
-    RectDto {
-        x: (rect.x as f64 * scale_factor).round() as i32,
-        y: (rect.y as f64 * scale_factor).round() as i32,
-        w: (rect.w as f64 * scale_factor).round() as i32,
-        h: (rect.h as f64 * scale_factor).round() as i32,
-    }
-}
 
 // -----------------------------------------------------------------------------
 // In-Memory Element Cache (60s TTL)

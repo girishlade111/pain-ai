@@ -1,5 +1,9 @@
 """pain ai — Session Search & SQLite State DB Engine (state.db)
 Source of truth: PRD.md §4.3 + hermes-map.md §6 + tools/session_search_tool.py
+SSOT (Phase 1): This module owns the sidecar HTTP transport over
+~/.pain-ai/state.db (messages_fts unicode61). Hermes session_search_tool +
+hermes_state_* own upstream agent-loop recall; Rust memory_cron.session_search
+holds no rows and delegates here by design.
 """
 
 import os

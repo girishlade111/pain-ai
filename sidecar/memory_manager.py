@@ -1,5 +1,9 @@
 """pain ai — Long-Term Memory Manager (MEMORY.md + USER.md)
 Source of truth: PRD.md §4.3 + hermes-map.md §6 + tools/memory_tool.py
+SSOT (Phase 1): Hermes tools/memory_tool.MemoryStore owns agent-loop semantics
+(limits 2200/1375, frozen prompt snapshot). This module is the sidecar HTTP
+adapter over the same ~/.pain-ai/memories files (HERMES_HOME == ~/.pain-ai
+at bridge boot, so paths coincide); Rust memory_cron.rs is the desktop IPC mirror.
 """
 
 from pathlib import Path

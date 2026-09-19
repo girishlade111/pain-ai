@@ -151,10 +151,15 @@ function checkGuiAutomation() {
 }
 
 function checkKeychain() {
+  // SSOT (Phase 1): Authoritative keychain roundtrip lives in Rust doctor.rs
+  // (keyring write-read-delete). Node cannot access OS Credential Manager
+  // without native deps, so report warn (not pass) and direct to `lsc doctor`
+  // via Tauri / Rust doctor_run for the real probe.
   return {
     name: "OS Keychain Credential Store",
-    status: "pass",
-    detail: "OS Credential Store active (Windows Credential Manager / Secret Service)",
+    status: "warn",
+    detail: "Node probe cannot perform OS keychain roundtrip; authoritative check is Rust doctor_run (keyring write-read-delete)",
+    fix: "Run the Tauri app Diagnostics or `cargo test doctor` for the real keychain probe",
   };
 }
 
@@ -201,10 +206,13 @@ function checkProvider() {
     } catch (e) {}
   }
 
+  // SSOT (Phase 1): Authoritative provider ping lives in Rust providers.rs
+  // (keychain read + GET {base}/models, key redacted). Node reports config only.
   return {
     name: "Active LLM Provider",
-    status: "pass",
-    detail: `Configured provider: ${active} [Key: encrypted in OS keychain or local endpoint]`,
+    status: "warn",
+    detail: `Configured provider: ${active} [config-only probe; authoritative ping is Rust provider_ping with key redacted]`,
+    fix: "Use Settings → Providers Test or Rust doctor_run for live latency check",
   };
 }
 

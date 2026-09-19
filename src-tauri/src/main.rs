@@ -5,6 +5,7 @@ mod audio;
 mod capture;
 mod chibi;
 mod commands;
+mod common;
 mod context;
 mod doctor;
 mod gate;

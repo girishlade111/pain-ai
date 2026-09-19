@@ -1,24 +1,17 @@
 // NO input/keystroke/mouse logging by design — change-events only
+// SSOT: UiResult owner is crate::common (desktop boundary). Hermes agent
+// execution/memory/tools remain Hermes-native; this file owns clipboard boundary only.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::Emitter;
 
+pub use crate::common::UiResult;
 use crate::gate::{check, load_rules, Action, ActionKind, Outcome};
 
 // -----------------------------------------------------------------------------
 // Data Structures
 // -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiResult<T> {
-    pub ok: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    pub code: Option<String>,
-    pub hint: Option<String>,
-    pub hit_type: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardPayload {

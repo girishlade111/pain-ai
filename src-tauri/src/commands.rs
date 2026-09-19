@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
+// SSOT (Phase 1): Desktop filesystem/shell boundary owner is this file.
+// Hermes file/terminal tools own agent-loop execution upstream (vendored);
+// sidecar/lsc_bridge.FILE_TOOL_SCHEMAS are contract schemas only, not execution.
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

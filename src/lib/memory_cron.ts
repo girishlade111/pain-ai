@@ -277,13 +277,21 @@ export async function sessionSearch(
   sessionId?: string,
   limit?: number
 ): Promise<SessionSearchHit[]> {
-  if (isTauri()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<SessionSearchHit[]>('session_search', { query, sessionId, limit });
-    } catch (err) {
-      console.warn('session_search invoke failed, falling back to mock:', err);
+  // SSOT (Phase 1): sidecar GET /v1/sessions/search over ~/.pain-ai/state.db.
+  // The Tauri invoke holds no rows by design (see memory_cron.rs).
+  try {
+    const params = new URLSearchParams({ query });
+    if (sessionId) params.set('session_id', sessionId);
+    if (limit !== undefined) params.set('limit', String(limit));
+    const resp = await fetch(`http://127.0.0.1:48293/v1/sessions/search?${params.toString()}`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (Array.isArray(data.results)) return data.results as SessionSearchHit[];
     }
+  } catch (err) {
+    console.warn('session_search sidecar fetch failed, falling back to mock:', err);
   }
   if (!query || !query.trim()) return MOCK_SEARCH_HITS;
   const q = query.toLowerCase();

@@ -4,6 +4,9 @@
 Audits skill bundles, scripts, and manifests before installation.
 Detects embedded API keys, tokens, private keys, and hardline destructive commands.
 Fails closed: any finding unconditionally halts installation.
+SSOT (Phase 1): Rust gate.rs owns desktop security policy; this scanner mirrors
+its blocklists for sidecar Hub installs. Hermes tools/approval_detection.py is the
+upstream agent-loop reference (vendored, untouched).
 """
 
 import os

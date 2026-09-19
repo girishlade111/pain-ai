@@ -3,29 +3,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use crate::common::{RectDto, UiResult};
 use crate::gate::{check, get_appdata_dir, load_rules, Action, ActionKind, Outcome};
 
 // -----------------------------------------------------------------------------
 // Data Structures
 // -----------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RectDto {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiResult<T> {
-    pub ok: bool,
-    pub data: Option<T>,
-    pub error: Option<String>,
-    pub code: Option<String>,
-    pub hint: Option<String>,
-    pub hit_type: Option<String>,
-}
+// SSOT: RectDto / UiResult live in crate::common (desktop boundary owner).
+// Re-exports above preserve `capture::RectDto` / `capture::UiResult` paths.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureOutput {

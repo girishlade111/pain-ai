@@ -1,5 +1,9 @@
 //! pain ai — Audio Subsystem (audio.rs)
 //!
+//! SSOT (Phase 1): Desktop audio device boundary owner (rodio playback, cpal mic,
+//! hound WAV, voice_state events). Speech engines live in sidecar/voice/
+//! (stt.py faster-whisper, tts.py Piper, segment.py sentence split); caption
+//! rendering lives in React (CaptionBar + lib/segment.ts mirror of segment.py).
 //! Provides sequential sentence audio queue playback using `rodio`, immediate <500ms stop,
 //! microphone capture via `cpal`/`hound`, and voice state synchronization events.
 

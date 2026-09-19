@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+// SSOT (Phase 1): Desktop security boundary owner is this file (gate::check).
+// Hermes tools/approval* + approval_detection own agent-loop approvals upstream
+// (vendored, untouched); sidecar/quarantine.py mirrors these blocklists for
+// pre-install scans only. On divergence, this file wins for desktop policy.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
