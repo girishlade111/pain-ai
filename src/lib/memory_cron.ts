@@ -302,6 +302,86 @@ export async function sessionSearch(
   }
 }
 
+/**
+ * Phase 8: chat session lifecycle over sidecar state.db (the desktop chat
+ * system of record). Explicit errors only — never fabricated sessions.
+ */
+export interface SessionSummary {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  lastMessage: string | null;
+  lastRole: string | null;
+  metadata: { source: string };
+}
+
+export interface SessionMessageRow {
+  id: number;
+  session_id: string;
+  role: string;
+  content: string;
+  tool_name?: string | null;
+  timestamp: number;
+}
+
+const SESSIONS_BASE = 'http://127.0.0.1:48293/v1/sessions';
+
+export async function sessionList(limit?: number): Promise<SessionSummary[]> {
+  const params = limit !== undefined ? `?limit=${limit}` : '';
+  const resp = await fetch(`${SESSIONS_BASE}${params}`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!resp.ok) {
+    throw new Error(`session list failed (HTTP ${resp.status})`);
+  }
+  const data = await resp.json();
+  if (!Array.isArray(data.sessions)) {
+    throw new Error('session list returned malformed data');
+  }
+  return data.sessions as SessionSummary[];
+}
+
+export async function sessionGet(sessionId: string, limit?: number): Promise<SessionMessageRow[]> {
+  const params = limit !== undefined ? `?limit=${limit}` : '';
+  const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}${params}`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!resp.ok) {
+    throw new Error(`session open failed (HTTP ${resp.status})`);
+  }
+  const data = await resp.json();
+  if (!Array.isArray(data.messages)) {
+    throw new Error('session detail returned malformed data');
+  }
+  return data.messages as SessionMessageRow[];
+}
+
+export async function sessionRename(sessionId: string, title: string): Promise<void> {
+  const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`session rename failed (HTTP ${resp.status}): ${detail || resp.statusText}`);
+  }
+}
+
+export async function sessionDelete(sessionId: string): Promise<void> {
+  const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    throw new Error(`session delete failed (HTTP ${resp.status}): ${detail || resp.statusText}`);
+  }
+}
+
 export async function cronList(): Promise<CronJob[]> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core');

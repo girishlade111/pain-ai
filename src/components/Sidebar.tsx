@@ -1,5 +1,12 @@
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import { SpikeMark } from './SpikeMark';
+import {
+  sessionList,
+  sessionRename,
+  sessionDelete,
+  type SessionSummary,
+} from '../lib/memory_cron';
 
 export interface SidebarProps {
   onCloseMobile?: () => void;
@@ -12,7 +19,89 @@ interface NavItem {
 }
 
 export function Sidebar({ onCloseMobile }: SidebarProps) {
-  const { activeTab, setActiveTab, clearChat } = useAppStore();
+  const {
+    activeTab,
+    setActiveTab,
+    newChat,
+    openSession,
+    currentSessionId,
+    sessionsVersion,
+  } = useAppStore();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+
+  const loadSessions = async () => {
+    try {
+      setSessionsError(null);
+      setSessions(await sessionList(50));
+    } catch (err) {
+      setSessionsError(`Chats unavailable: ${err}`);
+      setSessions([]);
+    }
+  };
+
+  useEffect(() => {
+    loadSessions();
+  }, [sessionsVersion]);
+
+  const handleOpenSession = async (id: string) => {
+    const ok = await openSession(id);
+    if (!ok) {
+      setSessionsError(`Could not open chat ${id}.`);
+      return;
+    }
+    setActiveTab('Chat');
+    if (onCloseMobile) onCloseMobile();
+  };
+
+  const handleNewChat = () => {
+    newChat();
+    setActiveTab('Chat');
+    if (onCloseMobile) onCloseMobile();
+  };
+
+  const handleRenameSave = async (id: string) => {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!title) return;
+    try {
+      await sessionRename(id, title);
+      loadSessions();
+    } catch (err) {
+      setSessionsError(`Rename failed: ${err}`);
+    }
+  };
+
+  const handleDeleteSession = async (id: string, title: string) => {
+    if (!window.confirm(`Delete chat "${title}"? Its history will be removed.`)) return;
+    try {
+      await sessionDelete(id);
+      if (id === currentSessionId) {
+        newChat();
+      } else {
+        loadSessions();
+      }
+    } catch (err) {
+      setSessionsError(`Delete failed: ${err}`);
+    }
+  };
+
+  const visibleSessions = sessions.filter((s) =>
+    s.title.toLowerCase().includes(sessionQuery.trim().toLowerCase())
+  );
+
+  const formatDate = (ms: number) => {
+    const d = new Date(ms * 1000);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
 
   const navItems: NavItem[] = [
     {
@@ -120,13 +209,9 @@ export function Sidebar({ onCloseMobile }: SidebarProps) {
         <div className="flex items-center space-x-2 px-1">
           <button
             type="button"
-            onClick={() => {
-              clearChat();
-              setActiveTab('Chat');
-              if (onCloseMobile) onCloseMobile();
-            }}
+            onClick={handleNewChat}
             className="flex-1 flex items-center justify-center space-x-2 py-2 px-3 rounded-md bg-canvas hover:bg-surface-cream-strong border border-hairline text-ink font-sans text-[13px] font-medium transition-colors cursor-pointer"
-            title="Start a new chat (shows EmptyState)"
+            title="Start a new chat"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -134,6 +219,104 @@ export function Sidebar({ onCloseMobile }: SidebarProps) {
             </svg>
             <span>New chat</span>
           </button>
+        </div>
+
+        {/* Chat sessions (Phase 8: real persisted conversations) */}
+        <div className="px-1 mt-1">
+          <div className="px-1 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
+            Chats
+          </div>
+          <input
+            type="text"
+            value={sessionQuery}
+            onChange={(e) => setSessionQuery(e.target.value)}
+            placeholder="Search chats…"
+            className="w-full h-8 px-2.5 mb-1.5 rounded-md bg-canvas border border-hairline font-sans text-[12px] text-ink placeholder:text-muted-soft focus:outline-none focus:border-primary"
+          />
+          {sessionsError && (
+            <p className="px-1 mb-1.5 font-sans text-[11px] text-error" role="alert">
+              {sessionsError}
+            </p>
+          )}
+          <div className="flex flex-col space-y-0.5 max-h-[220px] overflow-y-auto">
+            {visibleSessions.map((s) => {
+              const isActive = s.id === currentSessionId;
+              const isRenaming = renamingId === s.id;
+              return (
+                <div
+                  key={s.id}
+                  className={`group flex items-center rounded-md transition-colors ${
+                    isActive ? 'bg-surface-cream-strong shadow-2xs' : 'hover:bg-surface-cream-strong/50'
+                  }`}
+                >
+                  {isRenaming ? (
+                    <input
+                      type="text"
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => handleRenameSave(s.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') setRenamingId(null);
+                      }}
+                      className="flex-1 min-w-0 mx-1 my-1 h-7 px-2 rounded bg-canvas border border-primary font-sans text-[12px] text-ink focus:outline-none"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSession(s.id)}
+                      className="flex-1 min-w-0 text-left px-2.5 py-1.5 cursor-pointer"
+                      title={`${s.title} — ${s.messageCount} messages`}
+                    >
+                      <span className="block truncate font-sans text-[13px] font-medium text-ink">
+                        {s.title}
+                      </span>
+                      <span className="block font-sans text-[11px] text-muted">
+                        {formatDate(s.updatedAt)} · {s.messageCount} msgs
+                      </span>
+                    </button>
+                  )}
+                  {!isRenaming && (
+                    <div className="hidden group-hover:flex items-center pr-1.5 space-x-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenameDraft(s.title);
+                          setRenamingId(s.id);
+                        }}
+                        className="p-1 rounded text-muted hover:text-ink cursor-pointer"
+                        title="Rename chat"
+                        aria-label={`Rename ${s.title}`}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSession(s.id, s.title)}
+                        className="p-1 rounded text-muted hover:text-error cursor-pointer"
+                        title="Delete chat"
+                        aria-label={`Delete ${s.title}`}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 6h18" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {visibleSessions.length === 0 && !sessionsError && (
+              <p className="px-2 py-1.5 font-sans text-[12px] text-muted">
+                {sessionQuery ? 'No chats match.' : 'No chats yet — start one above.'}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Navigation list */}

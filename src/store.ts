@@ -114,6 +114,9 @@ interface AppState {
   toggleMode: () => void;
   setSidecarStatus: (status: SidecarStatus) => void;
   setCurrentSessionId: (id: string) => void;
+  newChat: () => void;
+  openSession: (id: string) => Promise<boolean>;
+  sessionsVersion: number;
   setApprovals: (items: PendingApprovalItem[]) => void;
   enqueueApproval: (item: PendingApprovalItem) => void;
   resolveApproval: (
@@ -149,6 +152,27 @@ interface AppState {
   refreshOutputConfig: () => Promise<void>;
 }
 
+const LAST_SESSION_KEY = 'pain_ai_last_session';
+
+// Phase 8: unique session per conversation. The last-open session survives
+// restarts via localStorage; history itself lives in sidecar state.db.
+function freshSessionId(): string {
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function initialSessionId(): string {
+  try {
+    const saved = localStorage.getItem(LAST_SESSION_KEY);
+    if (saved && saved.trim()) return saved;
+    const fresh = freshSessionId();
+    localStorage.setItem(LAST_SESSION_KEY, fresh);
+    return fresh;
+  } catch {
+    // Storage unavailable — fall through to a fresh id.
+  }
+  return freshSessionId();
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   messages: [],
   draft: '',
@@ -156,7 +180,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   mobileMenuOpen: false,
   mode: 'manual',
   sidecarStatus: 'starting',
-  currentSessionId: 'session-1',
+  currentSessionId: initialSessionId(),
+  sessionsVersion: 0,
   approvals: [],
   pendingDiff: null,
   planDraft: null,
@@ -270,7 +295,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setSidecarStatus: (sidecarStatus) => set({ sidecarStatus }),
-  setCurrentSessionId: (currentSessionId) => set({ currentSessionId }),
+  setCurrentSessionId: (currentSessionId) => {
+    try {
+      localStorage.setItem(LAST_SESSION_KEY, currentSessionId);
+    } catch {
+      // Non-fatal: history still works, only the resume pointer is lost.
+    }
+    set({ currentSessionId });
+  },
+  newChat: () => {
+    get().setCurrentSessionId(freshSessionId());
+    set({ messages: [], pendingDiff: null, screenView: null, captionState: null });
+  },
+  openSession: async (id: string) => {
+    // Continue a session: same id drives both the UI thread (sidecar
+    // history) and the agent turn (Hermes-native continuity).
+    try {
+      const { sessionGet } = await import('./lib/memory_cron');
+      const rows = await sessionGet(id, 200);
+      const loaded: Msg[] = [];
+      for (const row of rows) {
+        if (row.role === 'user') {
+          loaded.push({ id: `msg-${row.id}-u`, role: 'user', body: row.content });
+        } else if (row.role === 'assistant') {
+          loaded.push({ id: `msg-${row.id}-a`, role: 'agent', body: row.content });
+        }
+        // Tool/system rows stay recall-only; the thread shows the dialogue.
+      }
+      get().setCurrentSessionId(id);
+      set({ messages: loaded, pendingDiff: null, screenView: null, captionState: null });
+      return true;
+    } catch (err) {
+      console.warn('[OPEN SESSION FAILED]', err);
+      return false;
+    }
+  },
 
   send: (text) => {
     const content = (text !== undefined ? text : get().draft).trim();
@@ -340,6 +399,8 @@ export const useAppStore = create<AppState>((set, get) => ({
                   }
                 : m
             ),
+            // Phase 8: a finished turn changed history — refresh the list.
+            sessionsVersion: state.sessionsVersion + 1,
           }));
           get().speakCaption(finalText);
         },

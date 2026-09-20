@@ -101,7 +101,7 @@ except ImportError:
 
 try:
     from memory_manager import get_memory_manager
-    from session_search import get_state_db
+    from session_search import get_state_db, make_title
     from cron_manager import get_cron_manager
     from compressor import ContextCompressor
     from delegation import get_delegation_manager
@@ -129,7 +129,7 @@ try:
     )
 except ImportError:
     from sidecar.memory_manager import get_memory_manager
-    from sidecar.session_search import get_state_db
+    from sidecar.session_search import get_state_db, make_title
     from sidecar.cron_manager import get_cron_manager
     from sidecar.compressor import ContextCompressor
     from sidecar.delegation import get_delegation_manager
@@ -650,6 +650,36 @@ async def search_sessions(query: str, session_id: Optional[str] = None, limit: i
     return {"results": get_state_db().search_sessions(query, session_id=session_id, limit=limit)}
 
 
+# --- Chat Session Lifecycle (Phase 8) ---
+class SessionRenameRequest(BaseModel):
+    title: str
+
+
+@app.get("/v1/sessions")
+async def list_sessions(limit: int = 50):
+    """Chat session summaries for the sidebar (no fabricated rows)."""
+    return {"sessions": get_state_db().list_sessions(limit=limit)}
+
+
+@app.put("/v1/sessions/{session_id}")
+async def rename_session(session_id: str, req: SessionRenameRequest):
+    try:
+        ok = get_state_db().rename_session(session_id, req.title)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"ok": True, "session": get_state_db().get_session(session_id)}
+
+
+@app.delete("/v1/sessions/{session_id}")
+async def delete_session(session_id: str):
+    ok = get_state_db().delete_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"ok": True}
+
+
 @app.get("/v1/sessions/{session_id}")
 async def get_session_detail(session_id: str, limit: int = 100):
     return {"messages": get_state_db().get_session_messages(session_id, limit=limit)}
@@ -994,6 +1024,21 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
                 )
                 return
 
+            # Phase 8: record the turn in the chat session store (history must
+            # never break the turn itself). Session row is created once with a
+            # deterministic title; renames survive (insert never overwrites).
+            def _record_history(role: str, content: str) -> None:
+                try:
+                    db = get_state_db()
+                    if db.get_session(session_id) is None:
+                        db.insert_session(session_id, make_title(req.text), source="user")
+                    if (content or "").strip():
+                        db.insert_message(session_id, role, content)
+                except Exception as exc:
+                    logger.warning(f"session history record failed: {exc}")
+
+            _record_history("user", req.text)
+
             # Instantiate Hermes AIAgent with injected provider credentials
             agent_kwargs: Dict[str, Any] = {
                 "session_id": session_id,
@@ -1050,6 +1095,9 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
                     logger.warning(f"no verifiable artifacts: {exc}")
                     group = None
             artifacts = group["files"] if group else []
+
+            if final_text.strip():
+                _record_history("assistant", final_text)
 
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "message_done", "content": final_text,

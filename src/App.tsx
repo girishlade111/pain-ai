@@ -32,6 +32,7 @@ export function App() {
     mobileMenuOpen,
     setMobileMenuOpen,
     clearChat,
+    newChat,
     activeTab,
     setActiveTab,
     approvals,
@@ -561,7 +562,7 @@ export function App() {
             <button
               type="button"
               onClick={() => {
-                clearChat();
+                newChat();
                 setActiveTab('Chat');
               }}
               className="p-2 rounded-md text-muted hover:text-ink hover:bg-surface-cream-strong transition-colors cursor-pointer"

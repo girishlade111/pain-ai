@@ -53,17 +53,26 @@ CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
     VALUES (new.id, new.content, new.tool_name, new.role, new.session_id);
 END;
 
+-- NOTE: plain DELETE (not the FTS5 'delete'-command INSERT) maintains the
+-- index. The command form raises "SQL logic error" on current runtimes
+-- (verified SQLite 3.50.4), which made every message/session delete fail.
 CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, role, session_id)
-    VALUES ('delete', old.id, old.content, old.tool_name, old.role, old.session_id);
+    DELETE FROM messages_fts WHERE rowid = old.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content, tool_name, role, session_id)
-    VALUES ('delete', old.id, old.content, old.tool_name, old.role, old.session_id);
+    DELETE FROM messages_fts WHERE rowid = old.id;
     INSERT INTO messages_fts(rowid, content, tool_name, role, session_id)
     VALUES (new.id, new.content, new.tool_name, new.role, new.session_id);
 END;
+"""
+
+# Migrates databases created with the broken 'delete'-command triggers:
+# DROP + recreate runs on every StateDB construction (idempotent).
+TRIGGER_MIGRATION_SQL = """
+DROP TRIGGER IF EXISTS messages_fts_ad;
+DROP TRIGGER IF EXISTS messages_fts_au;
+DROP TRIGGER IF EXISTS messages_fts_ai;
 """
 
 
@@ -108,6 +117,8 @@ class StateDB:
     def _init_db(self):
         with self._get_connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            # Replace any legacy broken delete triggers before creating.
+            conn.executescript(TRIGGER_MIGRATION_SQL)
             conn.executescript(FTS_SCHEMA_SQL)
             conn.commit()
 
@@ -120,17 +131,45 @@ class StateDB:
     ):
         ts = started_at or time.time()
         with self._get_connection() as conn:
+            # DO NOTHING on conflict: a re-insert (e.g. continuing a renamed
+            # session) must never clobber the stored title.
             conn.execute(
                 """
                 INSERT INTO sessions (id, title, source, started_at, message_count)
                 VALUES (?, ?, ?, ?, 0)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    source = excluded.source
+                ON CONFLICT(id) DO NOTHING
                 """,
                 (session_id, title, source, ts),
             )
             conn.commit()
+
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT id, title, source, started_at, message_count FROM sessions WHERE id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def rename_session(self, session_id: str, title: str) -> bool:
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("Session title must not be empty")
+        title = title[:200]
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE sessions SET title = ? WHERE id = ?",
+                (title, session_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def insert_message(
         self,
@@ -255,6 +294,49 @@ class StateDB:
                 (limit,),
             )
             return [dict(r) for r in cursor.fetchall()]
+
+    def list_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Chat session summaries: id/title/createdAt/updatedAt/messageCount/
+        lastMessage + metadata. updatedAt derives from the latest message
+        (no schema migration); sessions without messages report started_at."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT
+                    s.id AS id,
+                    s.title AS title,
+                    s.source AS source,
+                    s.started_at AS createdAt,
+                    COALESCE(
+                        (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = s.id),
+                        s.started_at
+                    ) AS updatedAt,
+                    (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS messageCount,
+                    (SELECT m.role FROM messages m WHERE m.session_id = s.id
+                     ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS lastRole,
+                    (SELECT substr(m.content, 1, 200) FROM messages m WHERE m.session_id = s.id
+                     ORDER BY m.timestamp DESC, m.id DESC LIMIT 1) AS lastMessage
+                FROM sessions s
+                ORDER BY updatedAt DESC, s.started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            out = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["metadata"] = {"source": item.pop("source")}
+                out.append(item)
+            return out
+
+
+def make_title(text: str, fallback: str = "New chat") -> str:
+    """Deterministic session title from the first user message (no LLM call)."""
+    line = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+    line = " ".join(line.split())
+    if not line:
+        return fallback
+    return line if len(line) <= 60 else line[:57].rstrip() + "..."
 
 
 # Global state DB instance
