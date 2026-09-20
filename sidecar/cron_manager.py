@@ -190,8 +190,22 @@ class CronManager:
             return True
         return False
 
-    def trigger_job(self, job_id: str, output: str = "Executed in-app task successfully.") -> Optional[Dict[str, Any]]:
-        """Manually triggers a job immediately and appends to history."""
+    def trigger_job(self, job_id: str, output: str) -> Optional[Dict[str, Any]]:
+        """Manually triggers a job immediately and appends to history.
+
+        Phase 9: the output MUST describe a real execution — callers pass the
+        actual agent result. There is no default success text (a bare
+        trigger with no execution would fabricate success).
+        """
+        return self.record_run(job_id, status="success", output=output)
+
+    def record_run(self, job_id: str, status: str, output: str) -> Optional[Dict[str, Any]]:
+        """Append a run record for a REAL execution (scheduler or run-now).
+
+        status: "success" | "error". output: actual agent output or the
+        exception message. History keeps the last 5 runs; one-shot jobs
+        (no interval) disable after firing.
+        """
         jobs = self._read_jobs()
         for j in jobs:
             if j["id"] == job_id:
@@ -199,7 +213,7 @@ class CronManager:
                 record = {
                     "run_id": f"run-{uuid.uuid4().hex[:6]}",
                     "timestamp": now,
-                    "status": "success",
+                    "status": status,
                     "output": output,
                     "scheduled_at": j.get("next_run", now),
                     "delta_sec": round(abs(now - j.get("next_run", now)), 2),
@@ -222,12 +236,15 @@ class CronManager:
 
     def tick(self, now: Optional[float] = None) -> List[Dict[str, Any]]:
         """
-        Evaluates active jobs. Fired if next_run <= current time.
-        Disabled jobs are never fired.
+        Phase 9: PURE scheduler primitive. Returns due job snapshots
+        ({job_id, job_name, prompt, scheduled_at, delta_sec, ...}) and advances
+        next_run / disables one-shots — but records NO history. History is
+        written only by real execution (cron_scheduler.run_job_now), so a tick
+        can never fabricate success. Disabled jobs are never due.
         """
         current_time = now or time.time()
         jobs = self._read_jobs()
-        fired_records = []
+        due_records = []
         updated = False
 
         for j in jobs:
@@ -237,35 +254,27 @@ class CronManager:
             next_run = j.get("next_run", 0)
             if next_run <= current_time:
                 delta = current_time - next_run
-                record = {
+                due_records.append({
                     "job_id": j["id"],
                     "job_name": j["name"],
                     "prompt": j["prompt"],
                     "timestamp": current_time,
                     "scheduled_at": next_run,
                     "delta_sec": round(delta, 2),
-                    "status": "success",
-                    "output": f"Fired in-app reminder: {j['prompt']}",
-                }
-                j["last_run"] = current_time
-                if "history" not in j:
-                    j["history"] = []
-                j["history"].insert(0, record)
-                j["history"] = j["history"][:5]
+                })
 
-                # Update next run or disable one-shot
+                # Advance schedule so a later tick does not re-fire.
                 if j.get("interval_sec"):
                     j["next_run"] = current_time + j["interval_sec"]
                 else:
                     j["enabled"] = False
 
-                fired_records.append(record)
                 updated = True
 
         if updated:
             self._write_jobs(jobs)
 
-        return fired_records
+        return due_records
 
 
 # Global cron manager

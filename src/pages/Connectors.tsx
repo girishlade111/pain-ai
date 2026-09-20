@@ -3,6 +3,8 @@ import {
   mcpList,
   mcpEnable,
   mcpConfigure,
+  mcpConnect,
+  mcpDisconnect,
   mcpTools,
   type McpServerInfo,
   type McpToolInfo,
@@ -11,25 +13,29 @@ import {
 export function Connectors() {
   // Phase 2: start empty; servers/tools load from the desktop. Never seed
   // mock connectors as live data. Failures surface in loadError, not fakes.
+  // Phase 9: servers are Hermes-configured (config.yaml mcp_servers); the
+  // list is empty until one is connected — no phantom entries.
   const [servers, setServers] = useState<McpServerInfo[]>([]);
   const [tools, setTools] = useState<McpToolInfo[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [configuringServer, setConfiguringServer] = useState<McpServerInfo | null>(null);
+  const [addingNew, setAddingNew] = useState(false);
   const [configForm, setConfigForm] = useState<{
+    id: string;
+    transport: 'stdio' | 'sse';
     command: string;
     args: string;
     url: string;
-    toolsInclude: string;
-    toolsExclude: string;
     apiKey: string;
   }>({
+    id: '',
+    transport: 'stdio',
     command: '',
     args: '',
     url: '',
-    toolsInclude: '',
-    toolsExclude: '',
     apiKey: '',
   });
+  const [saving, setSaving] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -75,42 +81,61 @@ export function Connectors() {
 
   const openConfig = (server: McpServerInfo) => {
     setConfiguringServer(server);
+    setAddingNew(false);
     setConfigForm({
+      id: server.id,
+      transport: server.transport === 'sse' ? 'sse' : 'stdio',
       command: server.command || '',
       args: (server.args || []).join(' '),
       url: server.url || '',
-      toolsInclude: (server.tools_include || []).join(', '),
-      toolsExclude: (server.tools_exclude || []).join(', '),
       apiKey: '',
     });
   };
 
-  const handleSaveConfig = async () => {
-    if (!configuringServer) return;
-    const configPayload: Record<string, any> = {
-      command: configForm.command,
-      args: configForm.args.split(' ').filter(Boolean),
-      url: configForm.url,
-      tools_include: configForm.toolsInclude
-        ? configForm.toolsInclude.split(',').map((s) => s.trim())
-        : undefined,
-      tools_exclude: configForm.toolsExclude
-        ? configForm.toolsExclude.split(',').map((s) => s.trim())
-        : undefined,
-    };
-    if (configForm.apiKey) {
-      configPayload.token = configForm.apiKey;
-    }
+  const openAddNew = () => {
+    setConfiguringServer(null);
+    setAddingNew(true);
+    setConfigForm({ id: '', transport: 'stdio', command: '', args: '', url: '', apiKey: '' });
+  };
 
+  const handleSaveConfig = async () => {
+    // Phase 9: Save = real Hermes connect (upsert + discover). An optional
+    // API key is stored separately (server's own ${VAR} slot, .env only).
+    const id = (addingNew ? configForm.id : configuringServer?.id || '').trim();
+    if (!id) {
+      showToast('Error: server id is required.');
+      return;
+    }
+    setSaving(true);
     try {
-      const ok = await mcpConfigure(configuringServer.id, configPayload);
-      if (ok) {
-        showToast(`Updated configuration for ${configuringServer.name}`);
-        setConfiguringServer(null);
-        loadData();
+      await mcpConnect(id, {
+        transport: configForm.transport,
+        command: configForm.command.trim() || undefined,
+        args: configForm.args.split(' ').filter(Boolean),
+        url: configForm.url.trim() || undefined,
+      });
+      if (configForm.apiKey.trim()) {
+        await mcpConfigure(id, configForm.apiKey.trim());
       }
+      showToast(`Connected MCP server "${id}"`);
+      setConfiguringServer(null);
+      setAddingNew(false);
+      loadData();
     } catch (err) {
-      showToast(`Error: failed to save configuration (${err})`);
+      showToast(`Error: failed to connect server (${err})`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDisconnect = async (serverId: string, serverName: string) => {
+    if (!window.confirm(`Disconnect MCP server "${serverName}"? It stays configured but disabled.`)) return;
+    try {
+      await mcpDisconnect(serverId);
+      showToast(`Disconnected "${serverId}"`);
+      loadData();
+    } catch (err) {
+      showToast(`Error: failed to disconnect (${err})`);
     }
   };
 
@@ -166,9 +191,24 @@ export function Connectors() {
 
         {/* Server Cards Grid */}
         <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted mb-4">
-            Available &amp; Configured Connectors ({servers.length})
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">
+              Available &amp; Configured Connectors ({servers.length})
+            </h2>
+            <button
+              type="button"
+              onClick={openAddNew}
+              className="px-3 py-1.5 rounded-md bg-primary hover:bg-primary-active text-white font-sans text-[12px] font-medium transition-colors cursor-pointer"
+              title="Connect a new MCP server through Hermes"
+            >
+              + Connect Server
+            </button>
+          </div>
+          {servers.length === 0 && !loadError && (
+            <p className="mb-4 p-4 rounded-xl bg-surface-soft border border-hairline text-xs text-muted">
+              No MCP servers configured. Hermes provides the MCP client — connect a server to discover its tools live. Nothing is shown until a real server is connected.
+            </p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {servers.map((server) => {
               const letter = server.name.charAt(0).toUpperCase();
@@ -231,25 +271,27 @@ export function Connectors() {
 
                   {/* Footer actions */}
                   <div className="pt-3 border-t border-hairline flex items-center justify-between text-xs">
-                    {server.needs_auth ? (
-                      <span className="text-[11px] text-amber-800 font-medium flex items-center space-x-1">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                        </svg>
-                        <span>OAuth / Key</span>
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-muted font-mono">No auth required</span>
-                    )}
+                    <span className="text-[11px] font-mono text-muted" title={server.status}>
+                      status: {server.status || (server.enabled ? 'enabled' : 'disabled')}
+                    </span>
 
-                    <button
-                      type="button"
-                      onClick={() => openConfig(server)}
-                      className="px-2.5 py-1 rounded bg-canvas border border-hairline hover:border-muted font-medium text-body cursor-pointer transition-colors text-[11px]"
-                    >
-                      Configure &rarr;
-                    </button>
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        type="button"
+                        onClick={() => openConfig(server)}
+                        className="px-2.5 py-1 rounded bg-canvas border border-hairline hover:border-muted font-medium text-body cursor-pointer transition-colors text-[11px]"
+                      >
+                        Configure &rarr;
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDisconnect(server.id, server.name)}
+                        className="px-2.5 py-1 rounded text-error border border-error/30 hover:bg-error/10 font-medium cursor-pointer transition-colors text-[11px]"
+                        title="Shut the server down via Hermes (stays configured but disabled)"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -257,22 +299,24 @@ export function Connectors() {
           </div>
         </div>
 
-        {/* Configuration Modal */}
-        {configuringServer && (
+        {/* Configuration Modal (Phase 9: real Hermes connect) */}
+        {(configuringServer || addingNew) && (
           <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
             <div className="bg-canvas border border-hairline rounded-xl max-w-[540px] w-full p-6 shadow-2xl space-y-4 animate-in fade-in duration-150">
               <div className="flex items-center justify-between pb-3 border-b border-hairline">
                 <div>
                   <h3 className="font-semibold text-ink text-base">
-                    Configure {configuringServer.name}
+                    {addingNew ? 'Connect MCP Server' : `Configure ${configuringServer?.name}`}
                   </h3>
                   <p className="text-xs text-muted">
-                    Transport: {configuringServer.transport.toUpperCase()} &middot; ID: {configuringServer.id}
+                    {addingNew
+                      ? 'Registers with Hermes and discovers tools live'
+                      : `Transport: ${configuringServer?.transport.toUpperCase()} · ID: ${configuringServer?.id}`}
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setConfiguringServer(null)}
+                  onClick={() => { setConfiguringServer(null); setAddingNew(false); }}
                   className="text-muted hover:text-ink cursor-pointer p-1"
                 >
                   &times;
@@ -280,7 +324,32 @@ export function Connectors() {
               </div>
 
               <div className="space-y-3 text-xs">
-                {configuringServer.transport === 'stdio' ? (
+                {addingNew && (
+                  <>
+                    <div>
+                      <label className="font-medium text-ink block mb-1">Server ID</label>
+                      <input
+                        type="text"
+                        value={configForm.id}
+                        onChange={(e) => setConfigForm({ ...configForm, id: e.target.value })}
+                        placeholder="my-server (letters, digits, -, _)"
+                        className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-medium text-ink block mb-1">Transport</label>
+                      <select
+                        value={configForm.transport}
+                        onChange={(e) => setConfigForm({ ...configForm, transport: e.target.value as 'stdio' | 'sse' })}
+                        className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary cursor-pointer"
+                      >
+                        <option value="stdio">stdio (local command)</option>
+                        <option value="sse">SSE (remote URL)</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+                {configForm.transport === 'stdio' ? (
                   <>
                     <div>
                       <label className="font-medium text-ink block mb-1">Executable Command</label>
@@ -288,7 +357,7 @@ export function Connectors() {
                         type="text"
                         value={configForm.command}
                         onChange={(e) => setConfigForm({ ...configForm, command: e.target.value })}
-                        placeholder="npx or /path/to/binary"
+                        placeholder="python or /path/to/binary"
                         className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
                       />
                     </div>
@@ -298,7 +367,7 @@ export function Connectors() {
                         type="text"
                         value={configForm.args}
                         onChange={(e) => setConfigForm({ ...configForm, args: e.target.value })}
-                        placeholder="-y @modelcontextprotocol/server-..."
+                        placeholder="server.py --stdio"
                         className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
                       />
                     </div>
@@ -316,62 +385,22 @@ export function Connectors() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <div>
-                    <label className="font-medium text-ink block mb-1">
-                      Tools Include <span className="text-muted font-normal">(Priority)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={configForm.toolsInclude}
-                      onChange={(e) => setConfigForm({ ...configForm, toolsInclude: e.target.value })}
-                      placeholder="*_file, ping"
-                      className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-ink block mb-1">Tools Exclude</label>
-                    <input
-                      type="text"
-                      value={configForm.toolsExclude}
-                      onChange={(e) => setConfigForm({ ...configForm, toolsExclude: e.target.value })}
-                      placeholder="delete_*"
-                      className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
-                    />
-                  </div>
+                <div className="pt-2 border-t border-hairline">
+                  <label className="font-medium text-ink block mb-1">API Key <span className="text-muted font-normal">(optional, server&apos;s own key slot)</span></label>
+                  <input
+                    type="password"
+                    value={configForm.apiKey}
+                    onChange={(e) => setConfigForm({ ...configForm, apiKey: e.target.value })}
+                    placeholder="Stored in HERMES_HOME/.env (0600), never in JSON"
+                    className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
+                  />
                 </div>
-
-                {configuringServer.needs_auth && (
-                  <div className="pt-2 border-t border-hairline">
-                    <label className="font-medium text-ink block mb-1">Personal Access Token / API Key</label>
-                    <input
-                      type="password"
-                      value={configForm.apiKey}
-                      onChange={(e) => setConfigForm({ ...configForm, apiKey: e.target.value })}
-                      placeholder="Enter token for ~/.pain-ai/mcp-tokens/..."
-                      className="w-full h-8 px-3 rounded bg-surface-soft border border-hairline font-mono text-xs text-ink focus:outline-none focus:border-primary"
-                    />
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="text-[11px] text-muted">
-                        Stored with restricted permissions (0600)
-                      </span>
-                      <button
-                        type="button"
-                        disabled
-                        className="px-2 py-1 rounded bg-surface-soft text-muted text-[11px] cursor-not-allowed border border-hairline"
-                        title="OAuth flow arriving in v2 release"
-                      >
-                        Connect via OAuth (v2)
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div className="pt-3 border-t border-hairline flex items-center justify-end space-x-2">
                 <button
                   type="button"
-                  onClick={() => setConfiguringServer(null)}
+                  onClick={() => { setConfiguringServer(null); setAddingNew(false); }}
                   className="px-3 py-1.5 rounded text-xs font-medium text-body hover:bg-surface-soft cursor-pointer"
                 >
                   Cancel
@@ -379,9 +408,10 @@ export function Connectors() {
                 <button
                   type="button"
                   onClick={handleSaveConfig}
-                  className="px-3 py-1.5 rounded bg-primary text-white text-xs font-medium hover:bg-primary-active transition-colors cursor-pointer"
+                  disabled={saving}
+                  className="px-3 py-1.5 rounded bg-primary text-white text-xs font-medium hover:bg-primary-active transition-colors cursor-pointer disabled:opacity-60"
                 >
-                  Save Changes
+                  {saving ? 'Connecting…' : addingNew ? 'Connect Server' : 'Reconnect Server'}
                 </button>
               </div>
             </div>

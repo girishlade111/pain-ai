@@ -203,7 +203,12 @@ def test_cron_in_app_delivery_and_platform_refusal(tmp_path):
 
 
 def test_cron_fire_tolerance_and_disable_guarantee(tmp_path):
-    """Acceptance: Scheduled vs fired delta <= 30s; disabled job fires zero times."""
+    """Acceptance: Scheduled vs due delta <= 30s; disabled job never due.
+
+    Phase 9: tick() is a pure scheduler primitive — it returns due snapshots
+    and advances the schedule but records NO history. History is written only
+    by real execution (cron_scheduler.run_job_now).
+    """
     cron_mgr = CronManager(tmp_path / "cron")
     now = time.time()
 
@@ -217,17 +222,18 @@ def test_cron_fire_tolerance_and_disable_guarantee(tmp_path):
     scheduled_next_run = job["next_run"]
     assert abs((scheduled_next_run - now) - 120.0) < 1.0
 
-    # 1. Tick before scheduled time -> 0 fires
-    fired = cron_mgr.tick(now=scheduled_next_run - 10.0)
-    assert len(fired) == 0
+    # 1. Tick before scheduled time -> 0 due
+    due = cron_mgr.tick(now=scheduled_next_run - 10.0)
+    assert len(due) == 0
 
-    # 2. Tick at scheduled time + 5s -> fires with delta <= 30s
-    fired = cron_mgr.tick(now=scheduled_next_run + 5.0)
-    assert len(fired) == 1
-    assert fired[0]["job_name"] == "Ping Test"
-    assert fired[0]["delta_sec"] <= 30.0  # 5.0s delta <= 30s tolerance
+    # 2. Tick at scheduled time + 5s -> due with delta <= 30s, no history yet
+    due = cron_mgr.tick(now=scheduled_next_run + 5.0)
+    assert len(due) == 1
+    assert due[0]["job_name"] == "Ping Test"
+    assert due[0]["delta_sec"] <= 30.0  # 5.0s delta <= 30s tolerance
+    assert cron_mgr.list_jobs()[0]["history"] == []
 
-    # 3. Create recurring job, then disable it -> zero fires
+    # 3. Create recurring job, then disable it -> zero due
     recurring = cron_mgr.create_job(
         name="Recurring Task",
         schedule_nl="every 5 minutes",
@@ -238,8 +244,8 @@ def test_cron_fire_tolerance_and_disable_guarantee(tmp_path):
 
     # Tick past its scheduled run
     future = recurring["next_run"] + 60.0
-    fired_disabled = cron_mgr.tick(now=future)
-    assert len(fired_disabled) == 0, "Disabled job must never fire"
+    due_disabled = cron_mgr.tick(now=future)
+    assert len(due_disabled) == 0, "Disabled job must never be due"
 
 
 def test_subagent_delegation_max_parallel_clamping():

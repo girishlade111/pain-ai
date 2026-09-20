@@ -53,8 +53,9 @@ export interface McpServerInfo {
   name: string;
   description: string;
   icon: string;
-  transport: 'stdio' | 'sse';
+  transport: 'stdio' | 'sse' | string;
   enabled: boolean;
+  status?: string;
   command?: string;
   args?: string[];
   url?: string;
@@ -145,77 +146,6 @@ export const MOCK_SKILLS: SkillSummary[] = [
   },
 ];
 
-export const MOCK_MCP_SERVERS: McpServerInfo[] = [
-  {
-    id: 'filesystem',
-    name: 'Filesystem Access',
-    description: 'Read and write local project workspace files via MCP standard protocol.',
-    icon: 'folder',
-    transport: 'stdio',
-    enabled: true,
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem'],
-  },
-  {
-    id: 'git',
-    name: 'Git Integration',
-    description: 'Inspect commit history, diffs, branches, and staging trees safely.',
-    icon: 'git-branch',
-    transport: 'stdio',
-    enabled: true,
-    command: 'pain-ai-mcp-git',
-  },
-  {
-    id: 'postgres',
-    name: 'PostgreSQL Inspector',
-    description: 'Read-only schema inspection, table queries, and explain plan analyzer.',
-    icon: 'database',
-    transport: 'stdio',
-    enabled: false,
-    needs_auth: true,
-    has_auth: false,
-  },
-  {
-    id: 'slack',
-    name: 'Slack Workspaces',
-    description: 'Post updates to channels and read thread discussions via webhook token.',
-    icon: 'message-square',
-    transport: 'sse',
-    enabled: false,
-    url: 'https://mcp.slack.internal/events',
-    needs_auth: true,
-    has_auth: false,
-  },
-  {
-    id: 'github',
-    name: 'GitHub Repositories',
-    description: 'Search issues, pull requests, and file comments with personal access token.',
-    icon: 'github',
-    transport: 'stdio',
-    enabled: false,
-    needs_auth: true,
-    has_auth: true,
-  },
-  {
-    id: 'fetch',
-    name: 'Web Fetch / HTML Scraper',
-    description: 'Converts target web pages into clean markdown for LLM ingestion.',
-    icon: 'globe',
-    transport: 'stdio',
-    enabled: true,
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-fetch'],
-  },
-];
-
-export const MOCK_MCP_TOOLS: McpToolInfo[] = [
-  { name: 'mcp_filesystem_read_file', server_id: 'filesystem', description: 'Read file contents from filesystem' },
-  { name: 'mcp_filesystem_write_file', server_id: 'filesystem', description: 'Write file contents to filesystem' },
-  { name: 'mcp_git_status', server_id: 'git', description: 'Show the working tree status' },
-  { name: 'mcp_git_diff', server_id: 'git', description: 'Show changes between commits or work tree' },
-  { name: 'mcp_fetch_get', server_id: 'fetch', description: 'Retrieve web resource as markdown' },
-];
-
 export async function skillsList(workspace?: string): Promise<SkillSummary[]> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -272,16 +202,39 @@ export async function mcpEnable(serverId: string, enabled: boolean, workspace?: 
   throw new Error(`mcp_enable unavailable for '${serverId}': desktop runtime required.`);
 }
 
-export async function mcpConfigure(
-  serverId: string,
-  config: Record<string, any>,
-  workspace?: string
-): Promise<boolean> {
+export async function mcpConfigure(serverId: string, apiKey: string): Promise<boolean> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core');
-    return await invoke<boolean>('mcp_configure', { serverId, config, workspace });
+    return await invoke<boolean>('mcp_configure', { serverId, apiKey });
   }
   throw new Error(`mcp_configure unavailable for '${serverId}': desktop runtime required.`);
+}
+
+export interface McpConnectParams {
+  transport?: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+}
+
+export async function mcpConnect(
+  serverId: string,
+  params: McpConnectParams = {}
+): Promise<McpServerInfo> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<McpServerInfo>('mcp_connect', { serverId, ...params });
+  }
+  throw new Error(`mcp_connect unavailable for '${serverId}': desktop runtime required.`);
+}
+
+export async function mcpDisconnect(serverId: string, remove?: boolean): Promise<boolean> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<boolean>('mcp_disconnect', { serverId, remove });
+  }
+  throw new Error(`mcp_disconnect unavailable for '${serverId}': desktop runtime required.`);
 }
 
 export async function mcpTools(serverId?: string): Promise<McpToolInfo[]> {

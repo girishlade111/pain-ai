@@ -1,54 +1,30 @@
 #!/usr/bin/env python3
-"""Minimal MCP stdio echo test fixture."""
+"""Minimal MCP stdio echo server (real MCP protocol via the official SDK).
 
-import json
-import sys
+Used by the Hermes MCP integration tests: connect, list tools, execute the
+echo tool, disconnect. Requires the ``mcp`` package (test dependency only).
+"""
 
-def main():
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            break
-        try:
-            req = json.loads(line)
-            req_id = req.get("id")
-            method = req.get("method")
-            if method == "tools/list":
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "tools": [
-                            {
-                                "name": "echo",
-                                "description": "Echo back test message",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {"message": {"type": "string"}},
-                                    "required": ["message"]
-                                }
-                            }
-                        ]
-                    }
-                }
-            elif method == "tools/call":
-                params = req.get("params", {})
-                args = params.get("arguments", {})
-                msg = args.get("message", "")
-                resp = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": f"echo: {msg}"}]
-                    }
-                }
-            else:
-                resp = {"jsonrpc": "2.0", "id": req_id, "result": {}}
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
-        except Exception as e:
-            sys.stderr.write(f"Error: {e}\n")
-            sys.stderr.flush()
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:  # pragma: no cover - guarded at test collection
+    MCPServer = None
+
+
+def build_server():
+    server = MCPServer("echo")
+
+    @server.tool()
+    def echo(message: str) -> str:
+        """Echo back test message."""
+        return f"echo: {message}"
+
+    return server
+
+
+def main() -> None:
+    build_server().run()
+
 
 if __name__ == "__main__":
     main()

@@ -49,28 +49,6 @@ fn test_trust_gating_untrusted_project_skill() {
     let _ = std::fs::remove_dir_all(&tmp_path);
 }
 
-#[test]
-fn test_mcp_include_beats_exclude() {
-    let tools = vec![
-        "read_file".to_string(),
-        "write_file".to_string(),
-        "delete_file".to_string(),
-        "ping".to_string(),
-    ];
-
-    let inc = vec!["*_file".to_string()];
-    let exc = vec!["delete_file".to_string()];
-
-    // When both include and exclude are provided, include strictly takes precedence
-    let filtered = filter_mcp_tools(tools, Some(&inc), Some(&exc));
-    assert_eq!(filtered, vec!["read_file", "write_file", "delete_file"]);
-}
-
-#[test]
-fn test_glob_matches() {
-    assert!(glob_matches("*", "anything"));
-    assert!(glob_matches("read_*", "read_file"));
-    assert!(!glob_matches("read_*", "write_file"));
-    assert!(glob_matches("*_stats", "dir_stats"));
-    assert!(glob_matches("exact", "exact"));
-}
+// NOTE (Phase 9): include/exclude filtering is owned by sidecar/mcp_manager
+// (covered by Python tests); the Rust duplicates were removed with the local
+// catalog, so their unit tests move with them.

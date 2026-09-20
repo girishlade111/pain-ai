@@ -88,10 +88,21 @@ pub struct McpServerDto {
     pub description: String,
     pub transport: String,
     pub auth: String,
-    pub status: String, // "connected" | "needs-login" | "disabled"
+    pub status: String, // "connected" | "available" | "disabled" | "unavailable"
     pub enabled: bool,
     pub tool_count: usize,
     pub tools: Vec<serde_json::Value>,
+    // Phase 9: edit round-trip fields from Hermes server config (all optional).
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub needs_auth: bool,
+    #[serde(default)]
+    pub has_auth: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,43 +309,9 @@ pub fn scan_text_quarantine(text: &str, filename: &str) -> Vec<QuarantineFinding
     findings
 }
 
-pub fn filter_mcp_tools(
-    tools: Vec<String>,
-    include: Option<&[String]>,
-    exclude: Option<&[String]>,
-) -> Vec<String> {
-    if let Some(inc) = include {
-        if !inc.is_empty() {
-            return tools
-                .into_iter()
-                .filter(|t| inc.iter().any(|p| glob_matches(p, t)))
-                .collect();
-        }
-    }
-
-    if let Some(exc) = exclude {
-        return tools
-            .into_iter()
-            .filter(|t| !exc.iter().any(|p| glob_matches(p, t)))
-            .collect();
-    }
-
-    tools
-}
-
-pub fn glob_matches(pattern: &str, s: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return s.starts_with(prefix);
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return s.ends_with(suffix);
-    }
-    pattern == s
-}
-
+// NOTE (Phase 9): the Rust filter/glob helpers were removed with the local
+// MCP catalog. Include/exclude filtering lives in sidecar/mcp_manager
+// (Hermes-backed); workspace scoping is the allowlist file.
 // --- Tauri Commands ---
 
 #[tauri::command]
@@ -591,186 +568,209 @@ pub fn skills_remove(name: String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Phase 9: MCP lives in Hermes (client, registry, transports). These Tauri
+/// commands are thin authenticated proxies to the sidecar adapter — no local
+/// catalog, no phantom servers, no plaintext keys. Sidecar down =>
+/// explicit error, never fabricated data.
+mod mcp_proxy {
+    use super::{McpServerDto, McpToolDto};
+
+    fn sidecar_url(path: &str) -> Result<(String, String), String> {
+        let mgr = crate::sidecar::get_sidecar();
+        let port = mgr.get_status().port;
+        let token = mgr.get_token();
+        Ok((format!("http://127.0.0.1:{}{}", port, path), token))
+    }
+
+    fn encode(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        for b in raw.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/') {
+                out.push(b as char);
+            } else {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+        out
+    }
+
+    async fn get(path: &str, query: &[(String, String)]) -> Result<serde_json::Value, String> {
+        let (mut url, token) = sidecar_url(path)?;
+        if !query.is_empty() {
+            let qs: Vec<String> = query
+                .iter()
+                .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
+                .collect();
+            url = format!("{}?{}", url, qs.join("&"));
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("MCP proxy client failed: {}", e))?;
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .map_err(|e| format!("sidecar unreachable for MCP: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("sidecar MCP error (HTTP {})", resp.status().as_u16()));
+        }
+        resp.json().await.map_err(|e| format!("MCP proxy bad response: {}", e))
+    }
+
+    async fn post(path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        let (url, token) = sidecar_url(path)?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(180))
+            .build()
+            .map_err(|e| format!("MCP proxy client failed: {}", e))?;
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("sidecar unreachable for MCP: {}", e))?;
+        if !resp.status().is_success() {
+            let detail = resp.text().await.unwrap_or_else(|_| "unknown error".into());
+            return Err(format!("sidecar MCP error: {}", detail));
+        }
+        resp.json().await.map_err(|e| format!("MCP proxy bad response: {}", e))
+    }
+
+    fn block_on<F, T>(fut: F) -> Result<T, String>
+    where
+        F: std::future::Future<Output = Result<T, String>>,
+    {
+        // Tauri commands below are sync fns; bridge onto the runtime.
+        // A fresh single-thread runtime per call avoids re-entrancy hazards.
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("MCP proxy runtime failed: {}", e))?
+            .block_on(fut)
+    }
+
+    pub fn list(workspace: Option<String>) -> Result<Vec<McpServerDto>, String> {
+        let mut query = Vec::new();
+        if let Some(ws) = workspace {
+            query.push(("workspace".to_string(), ws));
+        }
+        let body = block_on(get("/v1/mcp/servers", &query))?;
+        let servers = body
+            .get("servers")
+            .ok_or_else(|| "sidecar MCP response missing servers".to_string())?;
+        serde_json::from_value(servers.clone()).map_err(|e| format!("MCP proxy bad servers: {}", e))
+    }
+
+    pub fn enable(server_id: String, enable: bool, workspace: Option<String>) -> Result<bool, String> {
+        let body = block_on(post(
+            "/v1/mcp/toggle",
+            serde_json::json!({"server_id": server_id, "enable": enable, "workspace": workspace}),
+        ))?;
+        body.get("enabled")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| "sidecar MCP toggle response malformed".to_string())
+    }
+
+    pub fn configure(server_id: String, api_key: String) -> Result<bool, String> {
+        // Empty key = deletion request through the sidecar (.env removal).
+        let empty = api_key.trim().is_empty();
+        let body = block_on(post(
+            "/v1/mcp/configure",
+            serde_json::json!({"server_id": server_id, "api_key": api_key}),
+        ))?;
+        let configured = body.get("configured").and_then(|v| v.as_bool()).unwrap_or(false);
+        if empty {
+            // Removal succeeds when the sidecar reports not-configured.
+            return Ok(!configured);
+        }
+        if !configured {
+            return Err("sidecar reported the key was not stored".to_string());
+        }
+        Ok(true)
+    }
+
+    pub fn tools(workspace: Option<String>) -> Result<Vec<McpToolDto>, String> {
+        let mut query = Vec::new();
+        if let Some(ws) = workspace {
+            query.push(("workspace".to_string(), ws));
+        }
+        let body = block_on(get("/v1/mcp/tools", &query))?;
+        let tools = body
+            .get("tools")
+            .ok_or_else(|| "sidecar MCP response missing tools".to_string())?;
+        serde_json::from_value(tools.clone()).map_err(|e| format!("MCP proxy bad tools: {}", e))
+    }
+
+    pub fn connect(
+        server_id: String,
+        transport: Option<String>,
+        command: Option<String>,
+        args: Option<Vec<String>>,
+        url: Option<String>,
+    ) -> Result<McpServerDto, String> {
+        let body = block_on(post(
+            "/v1/mcp/connect",
+            serde_json::json!({
+                "server_id": server_id,
+                "transport": transport.unwrap_or_else(|| "stdio".into()),
+                "command": command,
+                "args": args,
+                "url": url,
+            }),
+        ))?;
+        let server = body
+            .get("server")
+            .ok_or_else(|| "sidecar MCP connect response malformed".to_string())?;
+        serde_json::from_value(server.clone()).map_err(|e| format!("MCP proxy bad server: {}", e))
+    }
+
+    pub fn disconnect(server_id: String, remove: bool) -> Result<bool, String> {
+        let body = block_on(post(
+            "/v1/mcp/disconnect",
+            serde_json::json!({"server_id": server_id, "remove": remove}),
+        ))?;
+        // Disconnected when the sidecar reports no live connection.
+        Ok(!body.get("connected").and_then(|v| v.as_bool()).unwrap_or(true))
+    }
+}
+
 #[tauri::command]
 pub fn mcp_list(workspace: Option<String>) -> Result<Vec<McpServerDto>, String> {
-    // Desktop IPC mirror of sidecar/mcp_manager.CATALOG_SERVERS (authoritative for
-    // HTTP transport). Per-workspace enablement + API keys persist in
-    // ~/.pain-ai/mcp-servers.json (same shape as the sidecar); phase 2 reads
-    // them here so toggles survive restarts and mcp_tools derives honestly.
-    let home = get_pain_ai_home();
-    let cfg_path = home.join("mcp-servers.json");
-    let cfg: serde_json::Value = fs::read_to_string(&cfg_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let ws_key = workspace
-        .map(|w| w.replace('\\', "/"))
-        .unwrap_or_else(|| "default".to_string());
-    let enabled: Vec<String> = cfg
-        .get(&ws_key)
-        .and_then(|e| e.get("enabled"))
-        .and_then(|e| serde_json::from_value(e.clone()).ok())
-        .unwrap_or_else(|| vec!["echo".to_string(), "filesystem".to_string()]);
-    let has_key = |id: &str| {
-        cfg.get("keys")
-            .and_then(|k| k.get(id))
-            .and_then(|v| v.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false)
-    };
-    let is_enabled = |id: &str| enabled.iter().any(|e| e == id);
-    let status_of = |id: &str, auth: &str| {
-        if !is_enabled(id) {
-            "disabled"
-        } else if auth == "api-key" {
-            if has_key(id) { "connected" } else { "needs-login" }
-        } else if auth == "oauth" {
-            "needs-login"
-        } else {
-            "connected"
-        }
-    };
-    Ok(vec![
-        McpServerDto {
-            id: "filesystem".into(),
-            name: "Local Filesystem Extended".into(),
-            description: "Extended directory navigation and search operations.".into(),
-            transport: "stdio".into(),
-            auth: "none".into(),
-            status: status_of("filesystem", "none").into(),
-            enabled: is_enabled("filesystem"),
-            tool_count: 2,
-            tools: vec![
-                serde_json::json!({"name": "read_dir_stats", "description": "Read directory tree statistics"}),
-                serde_json::json!({"name": "find_duplicates", "description": "Scan directory for duplicates"}),
-            ],
-        },
-        McpServerDto {
-            id: "echo".into(),
-            name: "Echo Diagnostic Server".into(),
-            description: "Offline stdio echo server for MCP transport diagnostics.".into(),
-            transport: "stdio".into(),
-            auth: "none".into(),
-            status: status_of("echo", "none").into(),
-            enabled: is_enabled("echo"),
-            tool_count: 1,
-            tools: vec![
-                serde_json::json!({"name": "echo", "description": "Echo input back"}),
-            ],
-        },
-        McpServerDto {
-            id: "github".into(),
-            name: "GitHub Context".into(),
-            description: "Inspect repositories, pull requests, issues, and git blame.".into(),
-            transport: "stdio".into(),
-            auth: "api-key".into(),
-            status: status_of("github", "api-key").into(),
-            enabled: is_enabled("github"),
-            tool_count: 2,
-            tools: vec![
-                serde_json::json!({"name": "get_issue", "description": "Fetch GitHub issue"}),
-                serde_json::json!({"name": "list_pull_requests", "description": "List PRs in repo"}),
-            ],
-        },
-        McpServerDto {
-            id: "notion".into(),
-            name: "Notion Workspace".into(),
-            description: "Connect pages and databases from personal Notion workspace.".into(),
-            transport: "sse".into(),
-            auth: "oauth".into(),
-            status: status_of("notion", "oauth").into(),
-            enabled: is_enabled("notion"),
-            tool_count: 2,
-            tools: vec![
-                serde_json::json!({"name": "query_database", "description": "Query database"}),
-                serde_json::json!({"name": "append_block", "description": "Append text block"}),
-            ],
-        },
-    ])
+    mcp_proxy::list(workspace)
 }
 
 #[tauri::command]
 pub fn mcp_enable(server_id: String, enable: bool, workspace: Option<String>) -> Result<bool, String> {
-    // Phase 2: persist per-workspace enablement to ~/.pain-ai/mcp-servers.json
-    // (same shape as sidecar/mcp_manager: {<ws_key>: {enabled: [...]}}).
-    // Previously returned success without persisting (fake).
-    let home = get_pain_ai_home();
-    let cfg_path = home.join("mcp-servers.json");
-    let ws_key = workspace
-        .map(|w| w.replace('\\', "/"))
-        .unwrap_or_else(|| "default".to_string());
-    let mut cfg: serde_json::Value = fs::read_to_string(&cfg_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let entry = cfg
-        .as_object_mut()
-        .ok_or_else(|| "MCP config is not a JSON object".to_string())?
-        .entry(ws_key.clone())
-        .or_insert_with(|| serde_json::json!({"enabled": ["echo", "filesystem"]}));
-    let enabled = entry
-        .get_mut("enabled")
-        .and_then(|e| e.as_array_mut())
-        .ok_or_else(|| "MCP config entry is malformed".to_string())?;
-    let val = serde_json::Value::String(server_id.clone());
-    if enable && !enabled.contains(&val) {
-        enabled.push(val);
-    } else if !enable {
-        enabled.retain(|v| v != &val);
-    }
-    fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    Ok(enable)
+    mcp_proxy::enable(server_id, enable, workspace)
 }
 
 #[tauri::command]
 pub fn mcp_configure(server_id: String, api_key: String) -> Result<bool, String> {
-    // Phase 2: persist API keys to ~/.pain-ai/mcp-servers.json ("keys" map,
-    // same shape as sidecar). Previously returned success without storing.
-    if api_key.trim().is_empty() {
-        return Err("MCP API key must not be empty".to_string());
-    }
-    let home = get_pain_ai_home();
-    let cfg_path = home.join("mcp-servers.json");
-    let mut cfg: serde_json::Value = fs::read_to_string(&cfg_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let obj = cfg
-        .as_object_mut()
-        .ok_or_else(|| "MCP config is not a JSON object".to_string())?;
-    let keys = obj
-        .entry("keys")
-        .or_insert_with(|| serde_json::json!({}));
-    keys[server_id] = serde_json::Value::String(api_key);
-    fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
+    mcp_proxy::configure(server_id, api_key)
 }
 
 #[tauri::command]
 pub fn mcp_tools(workspace: Option<String>) -> Result<Vec<McpToolDto>, String> {
-    // Phase 2: derive from actually-connected servers (mcp_list), never a
-    // hardcoded list. github/notion only contribute tools once configured.
-    let servers = mcp_list(workspace)?;
-    let mut out = Vec::new();
-    for s in servers.iter().filter(|s| s.status == "connected") {
-        for t in &s.tools {
-            let raw = t.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-            out.push(McpToolDto {
-                name: format!("mcp_{}_{}", s.id, raw),
-                server_id: s.id.clone(),
-                server_name: s.name.clone(),
-                raw_name: raw.to_string(),
-                description: t
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            });
-        }
-    }
-    Ok(out)
+    mcp_proxy::tools(workspace)
+}
+
+#[tauri::command]
+pub fn mcp_connect(
+    server_id: String,
+    transport: Option<String>,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    url: Option<String>,
+) -> Result<McpServerDto, String> {
+    mcp_proxy::connect(server_id, transport, command, args, url)
+}
+
+#[tauri::command]
+pub fn mcp_disconnect(server_id: String, remove: Option<bool>) -> Result<bool, String> {
+    mcp_proxy::disconnect(server_id, remove.unwrap_or(false))
 }
 
 #[tauri::command]

@@ -114,6 +114,8 @@ fn main() {
             skills::mcp_enable,
             skills::mcp_configure,
             skills::mcp_tools,
+            skills::mcp_connect,
+            skills::mcp_disconnect,
             skills::learn_drafts_list,
             skills::learn_draft_approve,
             skills::learn_draft_reject,

@@ -33,6 +33,64 @@ BUNDLED_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 CURRENT_OS = "windows" if platform.system().lower() == "windows" else "linux"
 
 
+def bundled_skills_dir() -> Path:
+    """Absolute bundled-skills dir at runtime (frozen one-dir app included).
+
+    Phase 9: Hermes discovers skills under HERMES_HOME/skills plus its
+    ``skills.external_dirs`` config — this is the dir registered there so
+    bundled skills execute through Hermes (no second skill engine).
+    """
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / "sidecar" / "skills"
+        if cand.is_dir():
+            return cand
+    return BUNDLED_SKILLS_DIR
+
+
+def ensure_bundled_skills_visible(home: Optional[Path] = None) -> bool:
+    """Register the bundled skills dir in Hermes ``skills.external_dirs``.
+
+    Creates <home>/config.yaml when absent; merges into existing files without
+    touching other keys. Returns True when a write happened. Never raises:
+    visibility is best-effort at boot; failures are logged by the caller.
+    """
+    import yaml
+
+    if home is None:
+        env_home = os.environ.get("PAIN_AI_HOME", "").strip() or \
+            os.environ.get("HERMES_HOME", "").strip()
+        home = Path(env_home) if env_home else PAIN_AI_HOME
+    target = str(bundled_skills_dir())
+    cfg_path = home / "config.yaml"
+    try:
+        existing: Dict[str, Any] = {}
+        if cfg_path.exists():
+            loaded = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        skills_cfg = existing.get("skills")
+        if not isinstance(skills_cfg, dict):
+            skills_cfg = {}
+            existing["skills"] = skills_cfg
+        current = skills_cfg.get("external_dirs") or []
+        if not isinstance(current, list):
+            current = [current]
+        normalized = [str(x) for x in current]
+        if any(Path(x).resolve(strict=False) == Path(target).resolve(strict=False)
+               for x in normalized):
+            return False
+        skills_cfg["external_dirs"] = normalized + [target]
+        home.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(yaml.safe_dump(existing, default_flow_style=False,
+                                           allow_unicode=True),
+                            encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_dirs():
     USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     HUB_DIR.mkdir(parents=True, exist_ok=True)

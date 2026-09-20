@@ -282,40 +282,35 @@ pub async fn cron_delete(id: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn cron_run_now(id: String) -> Result<CronRunRecordDto, String> {
-    let home = get_pain_ai_home();
-    let cron_file = home.join("cron").join("jobs.json");
-    if !cron_file.exists() {
-        return Err("No cron jobs file found".to_string());
-    }
-    let data = fs::read_to_string(&cron_file).map_err(|e| e.to_string())?;
-    let mut jobs: Vec<CronJobDto> = serde_json::from_str(&data).unwrap_or_default();
+    // Phase 9: run-now executes the REAL task through the sidecar scheduler
+    // (POST /v1/cron/jobs/{id}/run, Hermes turn, recorded outcome). No local
+    // fabrication: sidecar unreachable or job missing surfaces as an error.
+    let token = crate::sidecar::get_sidecar().get_token();
+    let port = crate::sidecar::get_sidecar().get_status().port;
+    let url = format!("http://127.0.0.1:{}/v1/cron/jobs/{}/run", port, id);
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-
-    for j in &mut jobs {
-        if j.id == id {
-            let record = CronRunRecordDto {
-                run_id: format!("run-{}", &uuid_v4_prefix()),
-                timestamp: now,
-                status: "success".to_string(),
-                output: format!("Fired in-app reminder: {}", j.prompt),
-                scheduled_at: j.next_run,
-                delta_sec: (now - j.next_run).abs(),
-            };
-            j.last_run = Some(now);
-            j.history.insert(0, record.clone());
-            if j.history.len() > 5 {
-                j.history.truncate(5);
-            }
-            let serialized = serde_json::to_string_pretty(&jobs).map_err(|e| e.to_string())?;
-            fs::write(&cron_file, serialized).map_err(|e| e.to_string())?;
-            return Ok(record);
-        }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("run-now client failed: {}", e))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("sidecar unreachable for run-now: {}", e))?;
+    if resp.status().as_u16() == 404 {
+        return Err("Job not found".to_string());
     }
-    Err("Job not found".to_string())
+    if !resp.status().is_success() {
+        let detail = resp.text().await.unwrap_or_else(|_| "unknown error".into());
+        return Err(format!("run-now failed: {}", detail));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("run-now bad response: {}", e))?;
+    let record = body
+        .get("record")
+        .ok_or_else(|| "run-now response missing record".to_string())?;
+    serde_json::from_value(record.clone()).map_err(|e| format!("run-now bad record: {}", e))
 }
 
 #[tauri::command]

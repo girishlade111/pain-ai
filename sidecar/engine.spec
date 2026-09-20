@@ -14,6 +14,7 @@ sidecar_dir = os.path.abspath(SPECPATH)
 # Collect sidecar data files
 datas = [
     (os.path.join(sidecar_dir, 'requirements.txt'), 'sidecar'),
+    (os.path.join(sidecar_dir, 'skills'), 'sidecar/skills'),
 ]
 
 # Collect faster-whisper / piper assets if available
@@ -57,6 +58,8 @@ hiddenimports += [
     'sidecar.capability_gate',
     'sidecar.output_manager',
     'sidecar.artifact_store',
+    'sidecar.cron_scheduler',
+    'sidecar.turn_history',
 ]
 
 a = Analysis(

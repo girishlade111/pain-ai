@@ -115,14 +115,20 @@ export function Cron() {
     }
   };
 
+  const [runningId, setRunningId] = useState<string | null>(null);
+
   const handleRunNow = async (id: string) => {
+    // Phase 9: run-now executes the real Hermes turn (may take a while).
+    setRunningId(id);
     try {
       const rec = await cronRunNow(id);
-      showToast(`Job fired immediately (${rec.status}): ${rec.output}`);
+      showToast(`Job finished (${rec.status}): ${rec.output}`);
       loadJobs();
     } catch (err) {
       console.error('Failed to run job now:', err);
       showToast(`Error: failed to run job (${err})`);
+    } finally {
+      setRunningId(null);
     }
   };
 
@@ -283,9 +289,11 @@ export function Cron() {
                     <button
                       type="button"
                       onClick={() => handleRunNow(job.id)}
-                      className="px-2.5 py-1 rounded bg-canvas border border-hairline hover:bg-surface-cream-strong text-body text-[11px] font-medium transition-colors cursor-pointer"
+                      disabled={runningId === job.id}
+                      className="px-2.5 py-1 rounded bg-canvas border border-hairline hover:bg-surface-cream-strong text-body text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-60"
+                      title="Execute the real task through Hermes now"
                     >
-                      Run Now
+                      {runningId === job.id ? 'Running…' : 'Run Now'}
                     </button>
 
                     {/* Enable / Disable Switch */}

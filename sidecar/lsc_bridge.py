@@ -79,6 +79,9 @@ try:
         mcp_toggle as mgr_mcp_toggle,
         mcp_configure_key as mgr_mcp_configure_key,
         mcp_get_active_tools as mgr_mcp_get_active_tools,
+        mcp_connect as mgr_mcp_connect,
+        mcp_disconnect as mgr_mcp_disconnect,
+        mcp_execute_tool as mgr_mcp_execute_tool,
     )
 except ImportError:
     from sidecar.skills_manager import (
@@ -97,12 +100,17 @@ except ImportError:
         mcp_toggle as mgr_mcp_toggle,
         mcp_configure_key as mgr_mcp_configure_key,
         mcp_get_active_tools as mgr_mcp_get_active_tools,
+        mcp_connect as mgr_mcp_connect,
+        mcp_disconnect as mgr_mcp_disconnect,
+        mcp_execute_tool as mgr_mcp_execute_tool,
     )
 
 try:
     from memory_manager import get_memory_manager
-    from session_search import get_state_db, make_title
+    from session_search import get_state_db
     from cron_manager import get_cron_manager
+    from cron_scheduler import ensure_scheduler as cron_ensure_scheduler
+    from cron_scheduler import run_job_now as cron_run_job_now
     from compressor import ContextCompressor
     from delegation import get_delegation_manager
     from gate_policy import (
@@ -116,6 +124,8 @@ try:
         resolve_output_dir as output_resolve_dir,
         snapshot_dir as output_snapshot_dir,
     )
+    from turn_history import record_message as history_record_message
+    from turn_history import record_turn as history_record_turn
     from artifact_store import build_group as artifact_build_group
     from artifact_store import get_group as artifact_get_group
     from artifact_store import list_groups as artifact_list_groups
@@ -129,8 +139,10 @@ try:
     )
 except ImportError:
     from sidecar.memory_manager import get_memory_manager
-    from sidecar.session_search import get_state_db, make_title
+    from sidecar.session_search import get_state_db
     from sidecar.cron_manager import get_cron_manager
+    from sidecar.cron_scheduler import ensure_scheduler as cron_ensure_scheduler
+    from sidecar.cron_scheduler import run_job_now as cron_run_job_now
     from sidecar.compressor import ContextCompressor
     from sidecar.delegation import get_delegation_manager
     from sidecar.gate_policy import (
@@ -144,6 +156,8 @@ except ImportError:
         resolve_output_dir as output_resolve_dir,
         snapshot_dir as output_snapshot_dir,
     )
+    from sidecar.turn_history import record_message as history_record_message
+    from sidecar.turn_history import record_turn as history_record_turn
     from sidecar.artifact_store import build_group as artifact_build_group
     from sidecar.artifact_store import get_group as artifact_get_group
     from sidecar.artifact_store import list_groups as artifact_list_groups
@@ -530,6 +544,25 @@ class McpConfigureRequest(BaseModel):
     api_key: str
 
 
+class McpConnectRequest(BaseModel):
+    server_id: str
+    transport: str = "stdio"
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    url: Optional[str] = None
+    env: Optional[Dict[str, str]] = None
+
+
+class McpDisconnectRequest(BaseModel):
+    server_id: str
+    remove: bool = False
+
+
+class McpExecuteRequest(BaseModel):
+    tool: str
+    args: Optional[Dict[str, Any]] = None
+
+
 # --- Skills & Hub Endpoints ---
 @app.get("/v1/skills")
 async def get_skills(workspace: Optional[str] = None):
@@ -598,17 +631,59 @@ async def get_mcp_servers(workspace: Optional[str] = None):
 
 @app.post("/v1/mcp/toggle")
 async def post_mcp_toggle(req: McpToggleRequest):
-    return mgr_mcp_toggle(req.server_id, req.enable, workspace=req.workspace)
+    try:
+        return mgr_mcp_toggle(req.server_id, req.enable, workspace=req.workspace)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
 
 @app.post("/v1/mcp/configure")
 async def post_mcp_configure(req: McpConfigureRequest):
-    return mgr_mcp_configure_key(req.server_id, req.api_key)
+    try:
+        return mgr_mcp_configure_key(req.server_id, req.api_key)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
 
 @app.get("/v1/mcp/tools")
 async def get_mcp_tools(workspace: Optional[str] = None):
     return {"tools": mgr_mcp_get_active_tools(workspace=workspace)}
+
+
+@app.post("/v1/mcp/connect")
+async def post_mcp_connect(req: McpConnectRequest, authorization: Optional[str] = Header(None)):
+    """Phase 9: connect a real Hermes MCP server (registers + discovers)."""
+    verify_bearer_token(authorization)
+    try:
+        server = mgr_mcp_connect(req.server_id, transport=req.transport,
+                                 command=req.command, args=req.args,
+                                 url=req.url, env=req.env)
+        return {"ok": True, "server": server}
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+
+@app.post("/v1/mcp/disconnect")
+async def post_mcp_disconnect(req: McpDisconnectRequest, authorization: Optional[str] = Header(None)):
+    """Phase 9: shut a Hermes MCP server down (kept disabled by default)."""
+    verify_bearer_token(authorization)
+    try:
+        return mgr_mcp_disconnect(req.server_id, remove=req.remove)
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+
+@app.post("/v1/mcp/execute")
+async def post_mcp_execute(req: McpExecuteRequest, authorization: Optional[str] = Header(None)):
+    """Phase 9: execute one Hermes-registered MCP tool (agent-identical path)."""
+    verify_bearer_token(authorization)
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, mgr_mcp_execute_tool, req.tool, req.args or {})
+        return {"ok": True, "result": result}
+    except (ValueError, RuntimeError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
 
 # --- Artifact Tracking Endpoints (Phase 6) ---
@@ -686,6 +761,62 @@ async def get_session_detail(session_id: str, limit: int = 100):
 
 
 # --- Cron Jobs Endpoints ---
+def _provider_env() -> Dict[str, str]:
+    """Active provider credentials, read fresh (key edits apply live)."""
+    return {
+        "provider": os.environ.get("LSC_PROVIDER", "openai").strip().lower(),
+        "api_key": os.environ.get("LSC_API_KEY", "").strip(),
+        "base_url": os.environ.get("LSC_BASE_URL", "").strip(),
+        "model": os.environ.get("LSC_MODEL", "").strip(),
+    }
+
+
+def _agent_kwargs_for(session_id: str) -> Dict[str, Any]:
+    env = _provider_env()
+    kwargs: Dict[str, Any] = {
+        "session_id": session_id,
+        "provider": env["provider"],
+        "enabled_toolsets": LSC_DEFAULT_TOOLSETS,
+        "disabled_toolsets": LSC_DISABLED_TOOLSETS,
+    }
+    if env["api_key"]:
+        kwargs["api_key"] = env["api_key"]
+    if env["base_url"]:
+        kwargs["base_url"] = env["base_url"]
+    if env["model"]:
+        kwargs["model"] = env["model"]
+    return kwargs
+
+
+def _cron_agent_factory():
+    """AIAgent factory for scheduled turns (fresh creds per execution)."""
+    return AIAgent(**_agent_kwargs_for(f"cron-exec-{uuid.uuid4().hex[:8]}"))
+
+
+@app.on_event("startup")
+async def _start_cron_scheduler() -> None:
+    """Phase 9: boot the sidecar tick loop (idempotent; LSC_CRON_DISABLE=1 opts out)."""
+    try:
+        if cron_ensure_scheduler(_cron_agent_factory):
+            logger.info("cron scheduler loop running")
+    except Exception as exc:
+        logger.warning(f"cron scheduler failed to start: {exc}")
+    # Phase 9: register bundled skills with Hermes discovery (best effort).
+    try:
+        from skills_manager import ensure_bundled_skills_visible
+    except ImportError:
+        try:
+            from sidecar.skills_manager import ensure_bundled_skills_visible
+        except ImportError:
+            ensure_bundled_skills_visible = None
+    if ensure_bundled_skills_visible is not None:
+        try:
+            if ensure_bundled_skills_visible():
+                logger.info("bundled skills registered with Hermes discovery")
+        except Exception as exc:
+            logger.warning(f"bundled skills registration failed: {exc}")
+
+
 class CronCreateRequest(BaseModel):
     name: str
     schedule_nl: str
@@ -729,8 +860,20 @@ async def delete_cron_job(job_id: str):
 
 
 @app.post("/v1/cron/jobs/{job_id}/run")
-async def post_cron_run(job_id: str):
-    record = get_cron_manager().trigger_job(job_id)
+async def post_cron_run(job_id: str, authorization: Optional[str] = Header(None)):
+    """Phase 9: execute the real task through Hermes now (blocking).
+
+    Returns the recorded outcome (success with agent output, or error with
+    the failure message). Unknown job -> 404. Nothing is fabricated.
+    """
+    verify_bearer_token(authorization)
+    loop = asyncio.get_running_loop()
+    try:
+        record = await loop.run_in_executor(
+            None, cron_run_job_now, job_id, _cron_agent_factory)
+    except Exception as exc:
+        logger.error(f"cron run-now failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cron execution failed: {exc}")
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "record": record}
@@ -892,11 +1035,11 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
     queue: asyncio.Queue = asyncio.Queue()
     session_event_queues[session_id] = queue
 
-    # Resolve active provider credentials from environment
-    active_provider = os.environ.get("LSC_PROVIDER", "openai").strip().lower()
-    api_key = os.environ.get("LSC_API_KEY", "").strip()
-    base_url = os.environ.get("LSC_BASE_URL", "").strip()
-    model = os.environ.get("LSC_MODEL", "").strip()
+    # Resolve active provider credentials from environment (fresh per turn).
+    # Full kwargs (model/base URL included) come from _agent_kwargs_for.
+    _penv = _provider_env()
+    active_provider = _penv["provider"]
+    api_key = _penv["api_key"]
 
     # Gateway notification callback for Hermes approvals.
     # Phase 4: single choke point. Every Hermes-internal approval demand passes
@@ -1027,31 +1170,15 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
             # Phase 8: record the turn in the chat session store (history must
             # never break the turn itself). Session row is created once with a
             # deterministic title; renames survive (insert never overwrites).
-            def _record_history(role: str, content: str) -> None:
-                try:
-                    db = get_state_db()
-                    if db.get_session(session_id) is None:
-                        db.insert_session(session_id, make_title(req.text), source="user")
-                    if (content or "").strip():
-                        db.insert_message(session_id, role, content)
-                except Exception as exc:
-                    logger.warning(f"session history record failed: {exc}")
-
-            _record_history("user", req.text)
+            # Shared helper (turn_history) so chat and cron record identically.
+            try:
+                history_record_turn(get_state_db(), session_id, req.text, None)
+            except Exception as exc:
+                logger.warning(f"session history record failed: {exc}")
 
             # Instantiate Hermes AIAgent with injected provider credentials
-            agent_kwargs: Dict[str, Any] = {
-                "session_id": session_id,
-                "provider": active_provider,
-                "enabled_toolsets": LSC_DEFAULT_TOOLSETS,
-                "disabled_toolsets": LSC_DISABLED_TOOLSETS,
-            }
-            if api_key:
-                agent_kwargs["api_key"] = api_key
-            if base_url:
-                agent_kwargs["base_url"] = base_url
-            if model:
-                agent_kwargs["model"] = model
+            # (shared helper: identical kwargs for chat and cron turns).
+            agent_kwargs: Dict[str, Any] = _agent_kwargs_for(session_id)
 
             agent = AIAgent(**agent_kwargs)
 
@@ -1097,7 +1224,10 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
             artifacts = group["files"] if group else []
 
             if final_text.strip():
-                _record_history("assistant", final_text)
+                try:
+                    history_record_message(get_state_db(), session_id, "assistant", final_text)
+                except Exception as exc:
+                    logger.warning(f"session history record failed: {exc}")
 
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "message_done", "content": final_text,
