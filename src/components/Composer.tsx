@@ -12,6 +12,8 @@ export function Composer() {
     stopRecording,
     captionState,
     stopAudioPlayback,
+    autoSendVoice,
+    toggleAutoSendVoice,
   } = useAppStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -117,6 +119,21 @@ export function Composer() {
                 <line x1="12" y1="19" x2="12" y2="22" />
               </svg>
             )}
+          </button>
+
+          {/* Auto-send transcribed voice straight to Hermes */}
+          <button
+            type="button"
+            onClick={toggleAutoSendVoice}
+            className={`h-9 px-2.5 rounded-md border font-sans text-[12px] font-medium transition-colors cursor-pointer ${
+              autoSendVoice
+                ? 'bg-primary/10 border-primary text-primary'
+                : 'bg-canvas hover:bg-surface-soft border-hairline text-muted hover:text-ink'
+            }`}
+            title={autoSendVoice ? 'Voice transcripts send automatically' : 'Voice transcripts land in the composer for review'}
+            aria-pressed={autoSendVoice}
+          >
+            Auto-send
           </button>
 
           {/* Voice Stop square button during active playback */}

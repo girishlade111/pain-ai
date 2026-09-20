@@ -571,7 +571,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { voiceRecordStart } = await import('./lib/commands');
       await voiceRecordStart();
     } catch (err) {
+      // Phase 11: microphone unavailable (or desktop runtime missing) is an
+      // explicit error state — never leave the mic stuck in "recording".
       console.warn('[VOICE RECORD START FAILED]', err);
+      const errMsg: Msg = {
+        id: `msg-${Date.now()}-a`,
+        role: 'agent',
+        headline: 'Recording failed',
+        body: `Could not start recording: ${err}. Check microphone access, then hold the mic button to retry.`,
+      };
+      set((state) => ({ isRecording: false, messages: [...state.messages, errMsg] }));
     }
   },
 

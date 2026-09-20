@@ -32,6 +32,18 @@ STT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_CHOICES = ["large-v3-turbo-int8", "small", "base"]
 
+# Phase 11: process-lifetime model cache keyed (model, device). Constructing
+# WhisperModel per call costs ~20s of reload on CPU; caching changes nothing
+# about results, only latency.
+_MODEL_CACHE: Dict[str, Any] = {}
+
+# Phase 11: sub-speech energy floor (16-bit PCM peak). Below this there is no
+# human speech to transcribe — tiny Whisper variants famously hallucinate
+# words ("you", "thanks") on pure silence, so the gate returns honest empty
+# text instead of model confabulation. -36 dBFS keeps real speech (peaks in
+# the thousands) far above the floor.
+SILENCE_PEAK_THRESHOLD = 500
+
 
 def _trim_silence_vad(wav_path: Path) -> Path:
     """Trims leading and trailing silence from the audio file using energy thresholding (VAD).
@@ -107,18 +119,39 @@ def _trim_silence_vad(wav_path: Path) -> Path:
         return wav_path
 
 
+def _peak_amplitude(wav_path: Path) -> Optional[int]:
+    """Peak absolute sample of a 16-bit PCM WAV (None when unreadable)."""
+    try:
+        with wave.open(str(wav_path), "rb") as wf:
+            if wf.getsampwidth() != 2:
+                return None
+            frames = wf.readframes(wf.getnframes())
+        peak = 0
+        for (sample,) in struct.iter_unpack("<h", frames[: len(frames) // 2 * 2]):
+            peak = max(peak, abs(sample))
+            if peak >= SILENCE_PEAK_THRESHOLD:
+                break
+        return peak
+    except Exception:
+        return None
+
+
 def _transcribe_faster_whisper(wav_path: Path, model_size: str, device: str) -> Optional[Tuple[str, str, int]]:
-    """Transcribes audio using faster-whisper if available."""
+    """Transcribes audio using faster-whisper if available (model cached)."""
     try:
         from faster_whisper import WhisperModel
         start_time = time.time()
-        compute_type = "int8" if device == "cpu" else "float16"
-        model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            download_root=str(STT_MODELS_DIR)
-        )
+        cache_key = f"{model_size}/{device}"
+        model = _MODEL_CACHE.get(cache_key)
+        if model is None:
+            compute_type = "int8" if device == "cpu" else "float16"
+            model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+                download_root=str(STT_MODELS_DIR)
+            )
+            _MODEL_CACHE[cache_key] = model
         segments, info = model.transcribe(str(wav_path), beam_size=5)
         text = " ".join(seg.text for seg in segments).strip()
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -169,6 +202,14 @@ def transcribe(wav_path: str, model_size: Optional[str] = None) -> Dict[str, Any
 
     # Step 1: VAD Silence Trimming
     trimmed_wav = _trim_silence_vad(path)
+
+    # Step 1b: Sub-speech energy gate. Deterministic honest-empty for silence
+    # (tiny Whisper hallucinates words on pure silence); real speech with
+    # peaks in the thousands passes far above the floor.
+    peak = _peak_amplitude(trimmed_wav)
+    if peak is not None and peak < SILENCE_PEAK_THRESHOLD:
+        return {"ok": True, "text": "", "lang": "en", "ms": 0,
+                "engine": "silence-gate"}
 
     # Step 2: Determine Engine & Device
     engine_override = os.environ.get("LSC_STT", "").lower().strip()

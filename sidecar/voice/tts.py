@@ -181,9 +181,10 @@ def speak(
     active_voice = voice or os.environ.get("LSC_TTS_VOICE", DEFAULT_VOICE)
     active_engine = engine or os.environ.get("LSC_TTS_ENGINE", "piper")
 
-    # Content-addressed cache lookup
+    # Content-addressed cache lookup. Phase 11: the producing engine is part
+    # of the key — a fallback tone must never be served back as Piper speech.
     cache_key = hashlib.sha256(f"{clean_text}:{active_voice}:{active_engine}".encode("utf-8")).hexdigest()
-    output_wav = TTS_CACHE_DIR / f"tts_{cache_key[:16]}.wav"
+    output_wav = TTS_CACHE_DIR / f"tts_{cache_key[:16]}_{active_engine}.wav"
 
     if output_wav.exists() and output_wav.stat().st_size > 44:
         return {
