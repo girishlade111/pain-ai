@@ -58,32 +58,17 @@ def _generate_synthetic_docx(path: Path):
 
 
 def _generate_synthetic_xlsx(path: Path):
-    """Generates a minimal valid XLSX file (ZIP archive with sharedStrings.xml and sheet1.xml)."""
-    shared_strings_xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">'
-        '<si><t>Metric</t></si><si><t>Value</t></si><si><t>Accuracy</t></si><si><t>99.9%</t></si>'
-        '</sst>'
-    )
-    sheet1_xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<sheetData>'
-        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
-        '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row>'
-        '</sheetData>'
-        '</worksheet>'
-    )
-    workbook_xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></sheets>'
-        '</workbook>'
-    )
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("xl/sharedStrings.xml", shared_strings_xml)
-        zf.writestr("xl/worksheets/sheet1.xml", sheet1_xml)
-        zf.writestr("xl/workbook.xml", workbook_xml)
+    """Generates a genuine XLSX workbook via openpyxl (Phase 10: real files
+    only — the previous hand-rolled ZIP lacked [Content_Types].xml and only
+    parsed while openpyxl was absent)."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Metrics"
+    ws.append(["Metric", "Value"])
+    ws.append(["Accuracy", "99.9%"])
+    wb.save(str(path))
 
 
 def _generate_synthetic_png(path: Path):
