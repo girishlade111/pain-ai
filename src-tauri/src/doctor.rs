@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,26 +64,46 @@ pub fn check_sidecar_health() -> DoctorCheckResult {
         }
     }
 
-    // 2. Check engine binary presence and metadata
-    let binary_candidates = [
-        PathBuf::from("binaries/engine-x86_64-pc-windows-msvc.exe"),
-        PathBuf::from("src-tauri/binaries/engine-x86_64-pc-windows-msvc.exe"),
-        PathBuf::from("binaries/engine-x86_64-unknown-linux-gnu"),
-        PathBuf::from("src-tauri/binaries/engine-x86_64-unknown-linux-gnu"),
+    // 2. Packaged engine via the single shared resolver (resource dir first,
+    // repo staging last). A validated bundle reports its probed identity;
+    // the dev stub can never validate (size gate + identity probe).
+    if let Some(found) = crate::sidecar::SidecarManager::find_bundled_engine() {
+        let logs = crate::sidecar::SidecarManager::engine_logs_dir()
+            .map(|p| format!("; logs: {}", p.display()))
+            .unwrap_or_default();
+        return DoctorCheckResult {
+            name: "Sidecar Health & Version".into(),
+            status: DoctorStatus::Pass,
+            detail: format!(
+                "Packaged sidecar engine verified at {} (v{}, sha: {}){}",
+                found.exe.display(),
+                found.version,
+                found.sha.chars().take(12).collect::<String>(),
+                logs
+            ),
+            fix: None,
+        };
+    }
+
+    // 3. Dev checkout fallback: bridge script present but no packaged engine.
+    // Honest Warn (not Pass): production requires the bundled one-dir build.
+    for script in [
         PathBuf::from("sidecar/lsc_bridge.py"),
         PathBuf::from("../sidecar/lsc_bridge.py"),
-    ];
-
-    for candidate in &binary_candidates {
-        if candidate.exists() {
+    ] {
+        if script.exists() {
             return DoctorCheckResult {
                 name: "Sidecar Health & Version".into(),
-                status: DoctorStatus::Pass,
+                status: DoctorStatus::Warn,
                 detail: format!(
-                    "Sidecar engine asset verified at {:?} (v{}, sha: {})",
-                    candidate, expected_version, &expected_sha[..12]
+                    "Dev checkout: bridge script at {} but no packaged engine staged (expected v{}, sha: {})",
+                    script.display(),
+                    expected_version,
+                    &expected_sha[..12]
                 ),
-                fix: None,
+                fix: Some(
+                    "Stage the production bundle: `pyinstaller sidecar/engine.spec --distpath src-tauri/binaries --name engine`".into(),
+                ),
             };
         }
     }
@@ -92,7 +112,7 @@ pub fn check_sidecar_health() -> DoctorCheckResult {
         name: "Sidecar Health & Version".into(),
         status: DoctorStatus::Fail,
         detail: "Sidecar engine binary and Python bridge not found".into(),
-        fix: Some("Run `pyinstaller sidecar/engine.spec` or verify sidecar/lsc_bridge.py exists".into()),
+        fix: Some("Stage the production bundle: `pyinstaller sidecar/engine.spec --distpath src-tauri/binaries --name engine`".into()),
     }
 }
 
@@ -413,25 +433,22 @@ pub fn check_disk_and_signatures() -> DoctorCheckResult {
 pub fn check_av_quarantine() -> DoctorCheckResult {
     #[cfg(target_os = "windows")]
     {
-        let engine_paths = [
-            PathBuf::from("binaries/engine-x86_64-pc-windows-msvc.exe"),
-            PathBuf::from("src-tauri/binaries/engine-x86_64-pc-windows-msvc.exe"),
-        ];
+        // Probe the resolved packaged engine (shared resolver: resource dir
+        // first), never CWD-relative literals that break after installation.
+        let engine_exe =
+            crate::sidecar::SidecarManager::find_bundled_engine().map(|found| found.exe);
 
         let mut found_and_accessible = false;
         let mut error_detail = None;
 
-        for path in &engine_paths {
-            if path.exists() {
-                // Try reading file header to detect file locks / ERROR_ACCESS_DENIED (0x5)
-                match fs::File::open(path) {
-                    Ok(_) => {
-                        found_and_accessible = true;
-                        break;
-                    }
-                    Err(e) => {
-                        error_detail = Some(format!("Access denied on {:?}: {}", path, e));
-                    }
+        if let Some(path) = engine_exe.as_ref() {
+            // Try reading file header to detect file locks / ERROR_ACCESS_DENIED (0x5)
+            match fs::File::open(path) {
+                Ok(_) => {
+                    found_and_accessible = true;
+                }
+                Err(e) => {
+                    error_detail = Some(format!("Access denied on {}: {}", path.display(), e));
                 }
             }
         }

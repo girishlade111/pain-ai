@@ -49,8 +49,34 @@ def bundled_skills_dir() -> Path:
     return BUNDLED_SKILLS_DIR
 
 
+def hermes_skills_dir() -> Optional[Path]:
+    """Absolute Hermes-bundled skills dir (productivity/docx, pdf, …) or None.
+
+    Phase 12: in frozen one-dir runtimes the hermes-agent tree ships as
+    bundled data; in dev it is the repo checkout. None when absent (agent
+    falls back to model knowledge + installed libraries, honestly degraded).
+    """
+    import sys
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / "hermes-agent" / "skills"
+        if cand.is_dir():
+            return cand
+    cand = Path(__file__).resolve().parent.parent / "hermes-agent" / "skills"
+    return cand if cand.is_dir() else None
+
+
+def bundled_skills_dirs() -> List[Path]:
+    """All skill trees to expose through Hermes discovery (LSC + Hermes)."""
+    dirs = [bundled_skills_dir()]
+    hermes_dir = hermes_skills_dir()
+    if hermes_dir is not None and hermes_dir.resolve() != bundled_skills_dir().resolve():
+        dirs.append(hermes_dir)
+    return dirs
+
+
 def ensure_bundled_skills_visible(home: Optional[Path] = None) -> bool:
-    """Register the bundled skills dir in Hermes ``skills.external_dirs``.
+    """Register bundled skill dirs in Hermes ``skills.external_dirs``.
 
     Creates <home>/config.yaml when absent; merges into existing files without
     touching other keys. Returns True when a write happened. Never raises:
@@ -62,7 +88,7 @@ def ensure_bundled_skills_visible(home: Optional[Path] = None) -> bool:
         env_home = os.environ.get("PAIN_AI_HOME", "").strip() or \
             os.environ.get("HERMES_HOME", "").strip()
         home = Path(env_home) if env_home else PAIN_AI_HOME
-    target = str(bundled_skills_dir())
+    targets = [str(d) for d in bundled_skills_dirs()]
     cfg_path = home / "config.yaml"
     try:
         existing: Dict[str, Any] = {}
@@ -78,10 +104,12 @@ def ensure_bundled_skills_visible(home: Optional[Path] = None) -> bool:
         if not isinstance(current, list):
             current = [current]
         normalized = [str(x) for x in current]
-        if any(Path(x).resolve(strict=False) == Path(target).resolve(strict=False)
-               for x in normalized):
+        resolved = {str(Path(x).resolve(strict=False)) for x in normalized}
+        added = [t for t in targets
+                 if str(Path(t).resolve(strict=False)) not in resolved]
+        if not added:
             return False
-        skills_cfg["external_dirs"] = normalized + [target]
+        skills_cfg["external_dirs"] = normalized + added
         home.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(yaml.safe_dump(existing, default_flow_style=False,
                                            allow_unicode=True),
@@ -239,9 +267,13 @@ def skills_list(workspace: Optional[str] = None) -> List[Dict[str, Any]]:
     _ensure_dirs()
     by_name: Dict[str, Dict[str, Any]] = {}
 
-    # 1. Bundled skills
-    if BUNDLED_SKILLS_DIR.is_dir():
-        for entry in BUNDLED_SKILLS_DIR.iterdir():
+    # 1. Bundled skills. Phase 12: must use the _MEIPASS-aware helper, not
+    # the __file__-derived constant — frozen __file__ does not point into the
+    # bundle, so the constant resolves nowhere and packaged skills vanish
+    # (frozen /v1/skills returned [] despite shipped skill trees).
+    _bundled_dir = bundled_skills_dir()
+    if _bundled_dir.is_dir():
+        for entry in _bundled_dir.iterdir():
             if entry.is_dir() and (entry / "SKILL.md").exists():
                 s = _read_skill_from_dir(entry, "bundled")
                 if s:

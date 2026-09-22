@@ -5,6 +5,12 @@ dist/
 # Rust / Tauri
 src-tauri/target/
 target/
+# Phase 12: packaged sidecar one-dir builds (hundreds of MB) are release
+# artifacts, never committed. The tracked 235KB stub keeps dev builds green.
+# Canonical staging is src-tauri/binaries/engine/ (bundled as $RESOURCE/engine/);
+# engine-*/ covers legacy triple stagings from earlier drafts.
+src-tauri/binaries/engine/
+src-tauri/binaries/engine-*/
 
 # Python / Sidecar
 sidecar/.venv/

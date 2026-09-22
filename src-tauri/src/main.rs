@@ -59,6 +59,15 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Phase 12: publish the Tauri $RESOURCE dir BEFORE the first
+            // sidecar spawn so the bundled engine
+            // ($RESOURCE/engine/engine[.exe]) outranks every repo-relative
+            // staging path. The installed app carries no repo files.
+            {
+                use tauri::Manager;
+                let resource_dir = app.path().resource_dir().ok();
+                sidecar::SidecarManager::set_bundled_resource_dir(resource_dir);
+            }
             context::start_active_window_poller(app.handle().clone());
             Ok(())
         })

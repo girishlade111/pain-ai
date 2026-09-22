@@ -17,11 +17,42 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Configure paths: add hermes-agent to sys.path
+# Configure paths: add hermes-agent to sys.path.
+# Phase 12: frozen (PyInstaller one-dir) runtimes carry the hermes-agent
+# source tree as bundled data; source imports keep dev/prod behavior
+# identical (tool discovery scans real files). Repo-relative paths are only
+# used when they actually exist — never assumed.
+def _bundle_dir() -> Optional[Path]:
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return None
+
+
+def _hermes_src_candidates():
+    frozen_root = _bundle_dir()
+    if frozen_root is not None:
+        yield frozen_root / "hermes-agent"
+    yield Path(__file__).resolve().parent.parent / "hermes-agent"
+
+
+for _cand in _hermes_src_candidates():
+    if _cand.is_dir() and str(_cand) not in sys.path:
+        sys.path.insert(0, str(_cand))
+
+# Dev-checkout support: absolute `sidecar.*` imports (used across the bridge
+# and managers) need the repo root on sys.path, but `python
+# sidecar/lsc_bridge.py` only puts the script dir there — so the bridge died
+# with `ModuleNotFoundError: No module named 'sidecar'` in every CWD. Insert
+# the parent only when it really holds the `sidecar` package; frozen runtimes
+# skip this entirely (both spellings are frozen modules there).
+if not getattr(sys, "frozen", False):
+    _repo_root = Path(__file__).resolve().parent.parent
+    if ((_repo_root / "sidecar" / "__init__.py").is_file()
+            and str(_repo_root) not in sys.path):
+        sys.path.insert(0, str(_repo_root))
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-HERMES_SRC = BASE_DIR / "hermes-agent"
-if str(HERMES_SRC) not in sys.path:
-    sys.path.insert(0, str(HERMES_SRC))
 
 # Set pain-ai state root directory (~/.pain-ai)
 PAIN_AI_HOME = Path.home() / ".pain-ai"
@@ -700,6 +731,69 @@ async def get_artifact_group(group_id: str):
     return {"group": group}
 
 
+# --- Voice Endpoints (Phase 12: prod path — the Rust host fetches audio over
+# HTTP instead of shelling `python sidecar/voice/*.py`, which does not exist
+# outside the repo) ---
+class TtsRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+    engine: Optional[str] = None
+
+
+class SttRequest(BaseModel):
+    wav_path: str
+    model: Optional[str] = None
+
+
+@app.post("/v1/voice/tts")
+async def voice_tts(req: TtsRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
+    try:
+        from voice.tts import speak
+    except ImportError:
+        try:
+            from sidecar.voice.tts import speak
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=f"TTS engine unavailable: {exc}")
+    loop = asyncio.get_running_loop()
+    try:
+        res = await loop.run_in_executor(None, speak, req.text, req.voice, req.engine)
+    except Exception as exc:
+        logger.error(f"TTS failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}")
+    if not res.get("ok"):
+        return JSONResponse(status_code=422, content=res)
+    try:
+        with open(res["wav_path"], "rb") as fh:
+            import base64
+            wav_b64 = base64.b64encode(fh.read()).decode("ascii")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"TTS output unreadable: {exc}")
+    return {"ok": True, "wav_b64": wav_b64, "engine": res.get("engine"),
+            "ms": res.get("ms"), "cached": res.get("cached", False)}
+
+
+@app.post("/v1/voice/transcribe")
+async def voice_transcribe(req: SttRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
+    try:
+        from voice.stt import transcribe
+    except ImportError:
+        try:
+            from sidecar.voice.stt import transcribe
+        except ImportError as exc:
+            raise HTTPException(status_code=503, detail=f"STT engine unavailable: {exc}")
+    loop = asyncio.get_running_loop()
+    try:
+        res = await loop.run_in_executor(None, transcribe, req.wav_path, req.model)
+    except Exception as exc:
+        logger.error(f"STT failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"STT failed: {exc}")
+    if not res.get("ok"):
+        return JSONResponse(status_code=422, content=res)
+    return res
+
+
 # --- Memory Endpoints ---
 class MemoryEditRequest(BaseModel):
     target: str = "memory"
@@ -940,6 +1034,27 @@ def install_capability_wrapper() -> None:
             session_queue = queue
 
         def _execute() -> str:
+            # Phase 12: frozen runtimes have no `python` interpreter for skill
+            # helper scripts — run bundled ones in-process (post-gate: this
+            # only executes after the desktop policy allowed the call).
+            if function_name == "terminal":
+                try:
+                    from skill_runner import maybe_run_frozen_skill
+                except ImportError:
+                    try:
+                        from sidecar.skill_runner import maybe_run_frozen_skill
+                    except ImportError:
+                        maybe_run_frozen_skill = None  # type: ignore
+                if maybe_run_frozen_skill is not None:
+                    try:
+                        shimmed = maybe_run_frozen_skill(
+                            str((function_args or {}).get("command", "")),
+                            function_args or {})
+                        if shimmed is not None:
+                            logger.info("frozen skill-script executed in-process")
+                            return shimmed
+                    except Exception as exc:
+                        logger.warning(f"frozen skill-script shim failed, falling through: {exc}")
             return original(function_name, function_args, **kwargs)
 
         def _prompt(action: Dict[str, Any], prompt: Dict[str, Any]) -> Optional[str]:
@@ -1271,6 +1386,12 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
 
 
 if __name__ == "__main__":
+    # Phase 12: machine-readable identity probe. The Rust host validates a
+    # sidecar candidate by running it with this flag (no server boot).
+    if "--lsc-version" in sys.argv:
+        print(f"lsc-engine {BRIDGE_VERSION} {HERMES_COMMIT_SHA}", flush=True)
+        sys.exit(0)
+
     import uvicorn
 
     port = int(os.environ.get("PORT", "48293"))

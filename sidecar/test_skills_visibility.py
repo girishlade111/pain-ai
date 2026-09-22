@@ -13,7 +13,12 @@ import yaml
 root_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root_dir))
 
-from sidecar.skills_manager import bundled_skills_dir, ensure_bundled_skills_visible
+from sidecar.skills_manager import (
+    bundled_skills_dir,
+    bundled_skills_dirs,
+    ensure_bundled_skills_visible,
+    hermes_skills_dir,
+)
 
 EXPECTED_BUNDLED = {
     "daily-brief", "file-organize", "pdf-triage",
@@ -38,11 +43,22 @@ def _external_dirs(home: Path):
     return cfg["skills"]["external_dirs"]
 
 
+def test_hermes_productivity_skills_present():
+    """Phase 12: doc-generation skills ship for discovery (no second engine)."""
+    hermes_dir = hermes_skills_dir()
+    assert hermes_dir is not None and hermes_dir.is_dir()
+    for name in ("docx", "pdf", "xlsx", "powerpoint"):
+        skill_md = hermes_dir / "productivity" / name / "SKILL.md"
+        assert skill_md.is_file(), f"missing Hermes skill: {name}"
+    assert hermes_dir in bundled_skills_dirs()
+
+
 def test_ensure_creates_config_and_registers(tmp_path):
     home = tmp_path / "hermes-home"
     assert ensure_bundled_skills_visible(home) is True
     dirs = _external_dirs(home)
-    assert str(bundled_skills_dir()) in dirs
+    for expected in bundled_skills_dirs():
+        assert str(expected) in dirs
 
 
 def test_ensure_idempotent_no_duplicates(tmp_path):

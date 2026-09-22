@@ -42,7 +42,6 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "deb", "appimage"],
-    "externalBin": ["binaries/engine"],
     "resources": [
       "../src/assets/chibi.png",
       "../src/assets/chibi.json"

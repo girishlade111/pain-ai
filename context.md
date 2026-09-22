@@ -154,3 +154,10 @@ To tag this release:
 git tag -a v1.0.0 -m "Release v1.0.0 — pain ai (LadeStack Companion)"
 git push origin v1.0.0
 ```
+
+## P12 Hardening Pass (2026-09-22 — installed-build verification, SHIP GATE EVIDENCE)
+- Why: shipped P12 wired `engine.spec` to nothing (`externalBin` expected a single-file exe; one-dir was never bundled — installer shipped the 235KB stub), the tree didn't compile (enum/struct inside `impl`, adjacent-string-literal `Err`), dev sidecar never booted (`sidecar.*` imports), and the installed app exited 101 (`tokio::spawn` outside runtime in setup).
+- Fix: canonical one-dir `src-tauri/binaries/engine/` → `$RESOURCE/engine/` via new `tauri.release.conf.json` overlay (`npm run tauri:release`); resource-dir-first resolution + shared `find_bundled_engine` validator (stub can never pass); explicit stdio to `~/.pain-ai/logs/` (windowed engine hangs on inherited pipes); `_MEIPASS`-aware skills listing; `tauri::async_runtime::spawn` for the poller; deep-prune fix so `plugins/web` ships.
+- Proof: real PyInstaller build (6820 files/477MB → 173MB NSIS), silent install to `%LOCALAPPDATA%\pain ai`, neutral-CWD launch: app alive, bundled engine validated (v0.1.0/sha e2168f71), healthz 200, skills 6/6, memory R/W, TTS WAV, honest missing-key chat error. Evidence: `release-evidence/p12-installed-verification.md`.
+- Tests: Rust 124/124 · Python 112/112 · tsc 0 errors · vite clean.
+- Gaps left for GA sign-off: sign the installer (Smart App Control blocked the rebuilt unsigned setup; keys outside repo per policy) and run one with-model turn with real BYOK creds (none on this box).

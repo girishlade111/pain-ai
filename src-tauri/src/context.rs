@@ -115,7 +115,10 @@ pub fn clipboard_read_text() -> UiResult<ClipboardPayload> {
 // -----------------------------------------------------------------------------
 
 pub fn start_active_window_poller(app_handle: tauri::AppHandle) {
-    tokio::spawn(async move {
+    // Phase 12: setup() runs outside any Tokio runtime context, so a bare
+    // tokio::spawn panics here ("no reactor running") and kills the app on
+    // launch (exit 101). Tauri's managed runtime spawner is context-free.
+    tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(2000));
         let mut last_key: Option<(String, String)> = None;
 

@@ -65,11 +65,68 @@ fn get_app_data_audio_dir() -> PathBuf {
     dir
 }
 
-/// Synthesizes speech for a sentence using sidecar tts.py (single owner).
-/// Phase 2: no Rust-side tone synthesis. If the engine is unavailable the
-/// caller receives an explicit error; a sine tone presented as speech would be
-/// fabricated output.
+/// Sidecar HTTP endpoint for voice (Phase 12 prod path). None when the
+/// manager was never initialized (unit tests) — callers fall back to repo
+/// scripts without spawning a child process.
+fn sidecar_voice_base() -> Option<(String, String)> {
+    let mgr = crate::sidecar::try_get_sidecar()?;
+    let port = mgr.get_status().port;
+    Some((format!("http://127.0.0.1:{}", port), mgr.get_token()))
+}
+
+/// Fetch synthesized speech over HTTP (works against the packaged engine;
+/// repo scripts do not exist outside the checkout).
+fn http_tts_wav(text: &str, voice: Option<&str>) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let (base, token) = sidecar_voice_base().ok_or_else(|| "sidecar not initialized".to_string())?;
+    let mut body = serde_json::json!({ "text": text });
+    if let Some(v) = voice {
+        body["voice"] = serde_json::Value::String(v.to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|e| format!("TTS HTTP client failed: {}", e))?;
+    let resp = client
+        .post(format!("{}/v1/voice/tts", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("TTS sidecar unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("TTS sidecar error (HTTP {})", resp.status().as_u16()));
+    }
+    let parsed: serde_json::Value = resp
+        .json()
+        .map_err(|e| format!("TTS bad response: {}", e))?;
+    let b64 = parsed
+        .get("wav_b64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "TTS response missing audio".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("TTS audio decode failed: {}", e))
+}
+
+/// Synthesizes speech for a sentence.
+/// Phase 12: sidecar HTTP first (works with the packaged engine); repo
+/// script fallback only when repo files exist (dev). Phase 2 invariant kept:
+/// no Rust-side tone synthesis — failures are explicit errors.
 pub fn generate_sentence_wav(text: &str, voice: Option<&str>) -> Result<PathBuf, String> {
+    if let Ok(bytes) = http_tts_wav(text, voice) {
+        // Cache by content hash so repeated sentences skip re-synthesis.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        voice.hash(&mut hasher);
+        let dir = get_app_data_audio_dir().join("tts_http");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join(format!("speak_{:016x}.wav", hasher.finish()));
+        fs::write(&path, &bytes).map_err(|e| format!("TTS cache write failed: {}", e))?;
+        return Ok(path);
+    }
+
     // cargo test runs with CWD=src-tauri; the desktop runs with CWD=repo root.
     let tts_script = ["sidecar/voice/tts.py", "../sidecar/voice/tts.py"]
         .iter()
@@ -105,7 +162,7 @@ pub fn generate_sentence_wav(text: &str, voice: Option<&str>) -> Result<PathBuf,
         return Err("Failed to spawn TTS engine (sidecar/voice/tts.py)".to_string());
     }
 
-    Err("TTS engine script not found (sidecar/voice/tts.py)".to_string())
+    Err("TTS unavailable: sidecar unreachable and no repo script fallback".to_string())
 }
 
 /// Plays sentence items sequentially on the audio queue while emitting live voice_state events
@@ -363,10 +420,40 @@ pub fn voice_record_stop() -> Result<RecordResult, String> {
     })
 }
 
-/// Invokes sidecar stt.py to transcribe the provided WAV path.
-/// Phase 2: explicit errors only. A canned transcript would enter the prompt
-/// as fabricated user input.
+/// Transcribes a WAV file.
+/// Phase 12: sidecar HTTP first (packaged engine); repo script fallback for
+/// dev. Phase 2: explicit errors only — a canned transcript would enter the
+/// prompt as fabricated user input.
 pub fn stt_transcribe(wav_path: &str) -> Result<SttResult, String> {
+    if let Some((base, token)) = sidecar_voice_base() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(180))
+            .build()
+            .map_err(|e| format!("STT HTTP client failed: {}", e))?;
+        match client
+            .post(format!("{}/v1/voice/transcribe", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({ "wav_path": wav_path }))
+            .send()
+        {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(res) = resp.json::<SttResult>() {
+                        if !res.ok {
+                            return Err("STT engine unavailable (STT_UNAVAILABLE)".to_string());
+                        }
+                        if res.text.trim().is_empty() {
+                            return Err("STT engine returned empty transcript".to_string());
+                        }
+                        return Ok(res);
+                    }
+                    return Err("STT bad response".to_string());
+                }
+            }
+            Err(_) => {}
+        }
+        // Fall through to the repo script path below on any HTTP failure.
+    }
     // cargo test runs with CWD=src-tauri; the desktop runs with CWD=repo root.
     let stt_script = ["sidecar/voice/stt.py", "../sidecar/voice/stt.py"]
         .iter()
