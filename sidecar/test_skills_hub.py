@@ -10,6 +10,8 @@ Validates:
 """
 
 import json
+import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,6 +29,25 @@ class TestSkillsHubAndTrust(unittest.TestCase):
     def setUp(self):
         self.base_dir = Path(__file__).resolve().parent.parent
         self.fixtures_dir = self.base_dir / "tests" / "fixtures" / "hub-tap"
+        # P13: redirect ALL skills state to a temp home — hub installs,
+        # lockfile, trust records and drafts must never touch the live
+        # ~/.pain-ai.
+        self._tmp_home = Path(tempfile.mkdtemp(prefix="pain-ai-skills-test-"))
+        self._prev_pain = os.environ.get("PAIN_AI_HOME")
+        self._prev_hermes = os.environ.get("HERMES_HOME")
+        os.environ["PAIN_AI_HOME"] = str(self._tmp_home)
+        os.environ["HERMES_HOME"] = str(self._tmp_home)
+
+    def tearDown(self):
+        if self._prev_pain is None:
+            os.environ.pop("PAIN_AI_HOME", None)
+        else:
+            os.environ["PAIN_AI_HOME"] = self._prev_pain
+        if self._prev_hermes is None:
+            os.environ.pop("HERMES_HOME", None)
+        else:
+            os.environ["HERMES_HOME"] = self._prev_hermes
+        shutil.rmtree(self._tmp_home, ignore_errors=True)
 
     def test_1_hub_install_clean_skill_pins_lockfile(self):
         clean_src = self.fixtures_dir / "clean-tool"

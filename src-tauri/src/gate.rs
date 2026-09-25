@@ -116,6 +116,21 @@ pub const BLOCKLIST_PATTERNS: &[(&str, &str)] = &[
     (":(){ :|:& };:", "bash fork bomb"),
     ("kill -9 -1", "kill all system processes"),
     ("shutdown /s", "system shutdown command"),
+    // P13: abbreviation/obfuscation variants of the above families.
+    ("shutdown -s", "system shutdown command (flag form)"),
+    ("stop-computer", "PowerShell system shutdown"),
+    ("rd /s /q c:", "Windows system root recursive deletion (short form)"),
+    ("rd /s c:\\windows", "Windows directory recursive deletion (short form)"),
+    ("del /f /s /q c:", "Windows forced recursive file wipe"),
+    ("remove-item c:\\* -recurse", "PowerShell forced recursive deletion (unquoted)"),
+    ("format c: /q", "Windows disk drive quick format"),
+    ("reg delete hklm\\software", "Windows software registry hive delete"),
+    ("bcdedit", "Windows boot configuration tampering"),
+    ("vssadmin delete shadows", "Volume Shadow Copy destruction (ransomware pattern)"),
+    ("wbadmin delete", "Windows backup catalog destruction"),
+    ("wevtutil cl security", "Windows Security event log wipe"),
+    ("cipher /w:c", "Windows free-space wipe"),
+    ("sdelete", "Sysinternals secure deletion tool"),
 ];
 
 // 20+ Dangerous Patterns from Hermes approval_detection.py §4
@@ -135,12 +150,35 @@ pub const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
     ("curl | bash", "remote unverified script piping to bash"),
     ("wget | sh", "remote unverified script piping to shell"),
     ("wget | bash", "remote unverified script piping to bash"),
+    // P13: pipe forms with a URL between fetcher and shell (the literal
+    // above only matches adjacent tokens, missing `curl <url> | sh`).
+    ("| sh", "piping into shell"),
+    ("| bash", "piping into bash"),
+    ("| powershell", "piping into PowerShell"),
+    ("| cmd", "piping into cmd"),
     ("nc -e", "netcat executable reverse shell"),
     ("bash -i >& /dev/tcp", "bash interactive reverse shell"),
     ("git reset --hard", "destructive git working tree reset"),
     ("git clean -fdx", "destructive git untracked file purge"),
     ("git push --force", "destructive remote git branch rewrite"),
     ("taskkill /f /im *", "forced mass task termination"),
+    // P13: download cradles + encoded payloads (decoded by normalize_command).
+    ("invoke-expression", "PowerShell dynamic code execution"),
+    ("iex(", "PowerShell Invoke-Expression alias"),
+    ("downloadstring", "remote payload download cradle"),
+    ("downloadfile", "remote payload download to disk"),
+    ("frombase64string", "base64-encoded payload decode"),
+    ("encodedcommand", "PowerShell encoded command blob"),
+    (" -enc ", "PowerShell abbreviated encoded-command flag"),
+    (" -ec ", "PowerShell abbreviated encoded-command flag"),
+    ("mimikatz", "credential dumping tool"),
+    ("sekurlsa", "LSASS credential access (Mimikatz module)"),
+    ("psexec", "remote process execution tool"),
+    ("wmic process call create", "WMI remote process creation"),
+    ("schtasks /create", "scheduled task persistence"),
+    ("reg add hklm\\software\\microsoft\\windows\\currentversion\\run", "registry run-key persistence"),
+    ("new-service", "Windows service installation (persistence)"),
+    ("sc create", "Windows service creation (persistence)"),
 ];
 
 // In-memory registry of active pending approvals
@@ -153,6 +191,53 @@ static TRUSTED_WORKSPACES: Mutex<Option<HashMap<String, bool>>> = Mutex::new(Non
 /// leak into the developer's real config. Each test restores its snapshot.
 #[cfg(test)]
 pub static TEST_RULES_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// P13 test isolation: every test gets a private PAIN_AI_HOME so rules +
+/// audit writes NEVER touch the operator's live ~/.pain-ai (previously tests
+/// mutated live rules.json with snapshot-restore that leaked on any panic,
+/// and every check() appended to the live audit.log). Restores the previous
+/// env value and removes the temp dir on drop.
+///
+/// The guard ALSO holds the crate-wide rules mutex, serializing against
+/// legacy snapshot/restore tests and against each other — env vars are
+/// process-global, so file isolation alone cannot prevent cross-test races.
+/// Never take TEST_RULES_MUTEX explicitly in a test that holds a guard
+/// (std Mutex is not reentrant).
+#[cfg(test)]
+pub(crate) struct IsolatedHome {
+    prev: Option<std::ffi::OsString>,
+    dir: std::path::PathBuf,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl IsolatedHome {
+    pub(crate) fn new(tag: &str) -> Self {
+        let lock = TEST_RULES_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("pain-ai-gate-test-{}-{}", tag, nonce));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev = std::env::var_os("PAIN_AI_HOME");
+        std::env::set_var("PAIN_AI_HOME", &dir);
+        Self { prev, dir, _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for IsolatedHome {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var("PAIN_AI_HOME", v),
+            None => std::env::remove_var("PAIN_AI_HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
 
 pub fn get_appdata_dir() -> PathBuf {
     // Phase 4: ONE shared policy home for Rust + sidecar. Primary is
@@ -331,22 +416,162 @@ pub fn rule_matches(rule: &Rule, action: &Action) -> bool {
     pattern_matches(&rule.pattern, &action.target)
 }
 
-// Check hardline blocklist
+/// SECURITY (P13): normalize a command before pattern matching. Matching the
+/// raw string only is trivially bypassed by case tricks (handled), whitespace
+/// games (`rm  -rf   /`), quote/caret/backtick smuggling (`r'm'`, `c^md`,
+/// ``r`m``), and — critically — `-EncodedCommand` base64 blobs whose decoded
+/// payload is invisible to substring scans. Normalization never fails: on any
+/// decode error the raw text is still checked.
+pub fn normalize_command(command: &str) -> String {
+    // 0. Decode -EncodedCommand payloads from the ORIGINAL casing FIRST:
+    // base64 is case-sensitive, so lowercasing before decoding destroys the
+    // blob. Decoded text is lowercased on append below.
+    let decoded_parts = decode_encoded_command_args(command);
+    // 1. Lowercase + collapse all whitespace runs to single spaces.
+    let mut norm: String = command
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // 2. Strip smuggling characters: quotes, backticks, carets (cmd escape),
+    // dollar-paren kept (chaining is fine — substrings still match through it).
+    norm = norm
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '`' | '^'))
+        .collect();
+    // Collapse again (stripping can join tokens with double spaces).
+    norm = norm.split_whitespace().collect::<Vec<_>>().join(" ");
+    // 3. Append decoded payloads (lowercased) so blocklist patterns match
+    // THROUGH the encoding.
+    for decoded in decoded_parts {
+        norm.push(' ');
+        norm.push_str(&decoded.to_lowercase());
+    }
+    norm
+}
+
+/// Extract and base64-decode `-encodedcommand` / `-enc` / `-ec` payloads
+/// (PowerShell accepts UTF-16LE or UTF-8 blobs). Flag matching is
+/// case-insensitive but blobs are sliced from the ORIGINAL text. Returns raw
+/// decoded payloads (caller lowercases); undecodable tokens are skipped.
+fn decode_encoded_command_args(command: &str) -> Vec<String> {
+    fn is_enc_flag(token_lc: &str) -> bool {
+        // Full + unambiguous abbreviations. Bare `-e` is skipped (collides
+        // with -ErrorAction etc.); it is still caught when paired with
+        // frombase64string/invoke-expression markers.
+        matches!(
+            token_lc,
+            "-encodedcommand" | "-enc" | "-ec" | "/encodedcommand" | "/enc" | "/ec"
+        )
+    }
+    let mut out = Vec::new();
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if is_enc_flag(&tokens[i].to_lowercase()) {
+            if let Some(blob) = tokens.get(i + 1) {
+                if let Some(decoded) = try_b64_decode(blob) {
+                    out.push(decoded);
+                }
+            }
+            i += 2;
+            continue;
+        }
+        // Inline frombase64string('...') / frombase64string("...") cradles
+        // (case-insensitive search, original-case slice).
+        let token_lc = tokens[i].to_lowercase();
+        if let Some(start) = token_lc.find("frombase64string(") {
+            let rest = &tokens[i][start + "frombase64string(".len()..];
+            let blob: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '+' || *c == '/' || *c == '=')
+                .collect();
+            if blob.len() >= 8 {
+                if let Some(decoded) = try_b64_decode(&blob) {
+                    out.push(decoded);
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn try_b64_decode(blob: &str) -> Option<String> {
+    let clean: String = blob.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.len() < 8 || clean.len() % 4 != 0 {
+        return None;
+    }
+    if !clean.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=') {
+        return None;
+    }
+    let bytes = b64_decode(&clean)?;
+    // PowerShell -EncodedCommand is UTF-16LE; also try UTF-8.
+    if bytes.len() >= 2 {
+        let utf16: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        if let Ok(s) = String::from_utf16(&utf16) {
+            let trimmed: String = s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
+            if !trimmed.trim().is_empty() {
+                return Some(trimmed.to_lowercase());
+            }
+        }
+    }
+    String::from_utf8(bytes).ok().map(|s| s.to_lowercase())
+}
+
+/// Minimal base64 decoder (stdlib only, no new crates).
+fn b64_decode(input: &str) -> Option<Vec<u8>> {
+    fn val(c: char) -> Option<u8> {
+        match c {
+            'A'..='Z' => Some(c as u8 - b'A'),
+            'a'..='z' => Some(c as u8 - b'a' + 26),
+            '0'..='9' => Some(c as u8 - b'0' + 52),
+            '+' => Some(62),
+            '/' => Some(63),
+            '=' => None, // padding handled by caller length
+            _ => None,
+        }
+    }
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for c in input.chars() {
+        if c == '=' {
+            break;
+        }
+        let v = val(c)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8 & 0xff);
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+// Check hardline blocklist (normalized: case/space/quote/encoding evasions fail through to a match)
 pub fn check_blocklist(command: &str) -> Option<&'static str> {
-    let lower = command.to_lowercase();
+    let norm = normalize_command(command);
     for (pat, reason) in BLOCKLIST_PATTERNS {
-        if lower.contains(pat) {
+        if norm.contains(pat) {
             return Some(reason);
         }
     }
     None
 }
 
-// Check dangerous pattern set
+// Check dangerous pattern set (normalized)
 pub fn check_dangerous(command: &str) -> Option<&'static str> {
-    let lower = command.to_lowercase();
+    let norm = normalize_command(command);
     for (pat, desc) in DANGEROUS_PATTERNS {
-        if lower.contains(pat) {
+        if norm.contains(pat) {
             return Some(desc);
         }
     }
@@ -364,13 +589,26 @@ pub fn check(action: &Action, store: &RuleStore) -> Outcome {
     }
 
     // 2. Precedence Level 1: DENY rules (Global & Workspace)
-    // Deny > Ask > Allow
+    // Deny > Ask > Allow.
+    // P13: workspace deny rules carry a "deny:" prefix that must be STRIPPED
+    // before matching — previously the prefix went into pattern_matches, so
+    // no workspace deny rule could ever match (dead enforcement).
+    let ws_deny: Vec<Rule> = store
+        .workspace
+        .get(&action.workspace)
+        .map(|rules| {
+            rules
+                .iter()
+                .filter(|r| r.pattern.starts_with("deny:"))
+                .map(|r| Rule {
+                    kind: r.kind,
+                    pattern: r.pattern["deny:".len()..].to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let is_denied = store.deny.iter().any(|r| rule_matches(r, action))
-        || store
-            .workspace
-            .get(&action.workspace)
-            .map(|rules| rules.iter().filter(|r| r.pattern.starts_with("deny:")).any(|r| rule_matches(r, action)))
-            .unwrap_or(false);
+        || ws_deny.iter().any(|r| rule_matches(r, action));
 
     if is_denied {
         append_audit_log(action, "Deny", Some("Matched persistent deny rule"));
@@ -472,9 +710,12 @@ pub fn check(action: &Action, store: &RuleStore) -> Outcome {
 
     let approval_id = format!("appr-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
 
-    // Register pending approval for 300s timeout tracking
+    // Register pending approval for 300s timeout tracking. P13: sweep
+    // expired entries on every insert so the map cannot grow unboundedly
+    // across long sessions (expiry is still enforced at decide time).
     let mut pending_lock = PENDING_APPROVALS.lock().unwrap();
     let map = pending_lock.get_or_insert_with(HashMap::new);
+    map.retain(|_, p: &mut PendingApproval| p.created_at.elapsed() <= Duration::from_secs(300));
     map.insert(
         approval_id.clone(),
         PendingApproval {
@@ -542,17 +783,21 @@ pub fn gate_decide(approval_id: String, decision: Decision) -> Result<(), String
         }
         Decision::AllowWorkspace { ref workspace } => {
             let ws_rules = store.workspace.entry(workspace.clone()).or_default();
+            // P13: never persist raw secrets into rules.json (e.g. a curl
+            // command carrying a Bearer key). Redacted patterns fail to match
+            // rotated keys → fail-closed re-prompt, never silent allow.
             ws_rules.push(Rule {
                 kind: Some(pending.action.kind),
-                pattern: pending.action.target.clone(),
+                pattern: redact_secrets(&pending.action.target),
             });
             save_rules(&store)?;
             append_audit_log(&pending.action, "AllowedWorkspace", Some(workspace));
         }
         Decision::AllowGlobal => {
+            // P13: same secret hygiene as workspace grants (see above).
             store.global.push(Rule {
                 kind: Some(pending.action.kind),
-                pattern: pending.action.target.clone(),
+                pattern: redact_secrets(&pending.action.target),
             });
             save_rules(&store)?;
             append_audit_log(&pending.action, "AllowedGlobal", None);

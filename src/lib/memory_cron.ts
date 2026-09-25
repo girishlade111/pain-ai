@@ -223,6 +223,22 @@ export const MOCK_CRON_JOBS: CronJob[] = [
 
 const SIDECAR_BASE = 'http://127.0.0.1:48293';
 
+/**
+ * P13: sidecar Bearer headers for direct renderer→sidecar fetches. The token
+ * is fetched per call via the host (never persisted); browser-mode fallback
+ * returns no auth (no sidecar exists there either).
+ */
+async function sidecarAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const token = await invoke<string>('sidecar_token');
+    if (token) return { Authorization: `Bearer ${token}` };
+  } catch {
+    // Non-Tauri mode: no token available.
+  }
+  return {};
+}
+
 export async function memoryGet(target?: string): Promise<MemoryDoc> {
   // Phase 7: Hermes native memory via the sidecar (MemoryStore-backed
   // /v1/memory). The Rust duplicate is removed; this is the only read path.
@@ -230,6 +246,7 @@ export async function memoryGet(target?: string): Promise<MemoryDoc> {
   if (target) params.set('target', target);
   try {
     const resp = await fetch(`${SIDECAR_BASE}/v1/memory?${params.toString()}`, {
+      headers: await sidecarAuthHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!resp.ok) {
@@ -247,7 +264,7 @@ export async function memoryEdit(target: string, content: string): Promise<Memor
   try {
     const resp = await fetch(`${SIDECAR_BASE}/v1/memory`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await sidecarAuthHeaders()) },
       body: JSON.stringify({ target, content }),
       signal: AbortSignal.timeout(8000),
     });
@@ -287,6 +304,7 @@ export async function sessionSearch(
     if (sessionId) params.set('session_id', sessionId);
     if (limit !== undefined) params.set('limit', String(limit));
     const resp = await fetch(`http://127.0.0.1:48293/v1/sessions/search?${params.toString()}`, {
+      headers: await sidecarAuthHeaders(),
       signal: AbortSignal.timeout(3000),
     });
     if (resp.ok) {
@@ -331,6 +349,7 @@ const SESSIONS_BASE = 'http://127.0.0.1:48293/v1/sessions';
 export async function sessionList(limit?: number): Promise<SessionSummary[]> {
   const params = limit !== undefined ? `?limit=${limit}` : '';
   const resp = await fetch(`${SESSIONS_BASE}${params}`, {
+    headers: await sidecarAuthHeaders(),
     signal: AbortSignal.timeout(5000),
   });
   if (!resp.ok) {
@@ -346,6 +365,7 @@ export async function sessionList(limit?: number): Promise<SessionSummary[]> {
 export async function sessionGet(sessionId: string, limit?: number): Promise<SessionMessageRow[]> {
   const params = limit !== undefined ? `?limit=${limit}` : '';
   const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}${params}`, {
+    headers: await sidecarAuthHeaders(),
     signal: AbortSignal.timeout(5000),
   });
   if (!resp.ok) {
@@ -361,7 +381,7 @@ export async function sessionGet(sessionId: string, limit?: number): Promise<Ses
 export async function sessionRename(sessionId: string, title: string): Promise<void> {
   const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(await sidecarAuthHeaders()) },
     body: JSON.stringify({ title }),
     signal: AbortSignal.timeout(5000),
   });
@@ -374,6 +394,7 @@ export async function sessionRename(sessionId: string, title: string): Promise<v
 export async function sessionDelete(sessionId: string): Promise<void> {
   const resp = await fetch(`${SESSIONS_BASE}/${encodeURIComponent(sessionId)}`, {
     method: 'DELETE',
+    headers: await sidecarAuthHeaders(),
     signal: AbortSignal.timeout(5000),
   });
   if (!resp.ok) {

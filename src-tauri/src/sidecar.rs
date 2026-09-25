@@ -35,6 +35,16 @@ struct InnerManager {
     app_shutting_down: bool,
 }
 
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0xf) as usize] as char);
+    }
+    s
+}
+
 #[derive(Clone)]
 pub struct SidecarManager {
     inner: Arc<Mutex<InnerManager>>,
@@ -92,11 +102,31 @@ impl SidecarManager {
     }
 
     fn generate_token() -> String {
-        // Generate 32-byte secure random hex string (64 characters)
+        // SECURITY (P13): 32 bytes from the OS CSPRNG (BCryptGenRandom /
+        // getrandom), hex-encoded. The previous time+pid construction was
+        // predictable to any local observer. Falls back to a hashed entropy
+        // mix only if the OS RNG is unavailable (fail-operational, logged).
+        let mut bytes = [0u8; 32];
+        if getrandom::getrandom(&mut bytes).is_ok() {
+            return hex_encode(&bytes);
+        }
+        eprintln!("[SIDECAR] OS RNG unavailable; using fallback token entropy");
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let pid = std::process::id();
-        format!("{:032x}{:016x}{:016x}", now, pid, now ^ 0x5a5a5a5a5a5a5a5a)
+        let mut h = DefaultHasher::new();
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().hash(&mut h);
+        std::process::id().hash(&mut h);
+        std::thread::current().id().hash(&mut h);
+        let addr = Box::into_raw(Box::new(0u8)) as usize;
+        addr.hash(&mut h);
+        unsafe { let _ = Box::from_raw(addr as *mut u8); }
+        let mut mixed = [0u8; 32];
+        let (a, b) = (h.finish(), h.finish().wrapping_mul(0x9e3779b97f4a7c15));
+        mixed[..8].copy_from_slice(&a.to_le_bytes());
+        mixed[8..16].copy_from_slice(&b.to_le_bytes());
+        mixed[16..].copy_from_slice(&a.to_be_bytes());
+        hex_encode(&mixed)
     }
 
     /// Dev-only interpreter lookup (repo checkout): never used by the
@@ -490,9 +520,14 @@ impl SidecarManager {
     }
 
     pub fn restart(&self) {
+        // SECURITY (P13): rotate the Bearer token on every restart so a
+        // token captured from a previous sidecar lifetime is useless. The
+        // frontend refetches via sidecar_token per call; in-flight requests
+        // with the old token fail closed with 401 and are retried.
         let mut lock = self.inner.lock().unwrap();
         lock.restart_count = 0;
         lock.cold_start_ms = None;
+        lock.token = Self::generate_token();
         drop(lock);
         self.spawn_child();
     }

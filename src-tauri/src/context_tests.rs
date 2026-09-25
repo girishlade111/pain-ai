@@ -1,10 +1,10 @@
 use super::*;
 use crate::gate::Rule;
-use crate::gate::TEST_RULES_MUTEX;
+use crate::gate::IsolatedHome;
 
 #[test]
 fn test_clipboard_read_gate_denial() {
-    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let _iso = IsolatedHome::new("context_test");
     let snapshot = load_rules();
     {
         let mut store = load_rules();

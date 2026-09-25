@@ -1,6 +1,6 @@
 use super::*;
 use crate::gate::Rule;
-use crate::gate::TEST_RULES_MUTEX;
+use crate::gate::IsolatedHome;
 
 fn sample_node(id: &str, name: &str, role: &str, aid: Option<&str>, class: Option<&str>) -> Node {
     Node {
@@ -138,7 +138,7 @@ fn test_rect_convert_200_percent() {
 
 #[test]
 fn test_fallback_decision_on_miss() {
-    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let _iso = IsolatedHome::new("uia_test");
     let snapshot = load_rules();
     {
         let mut store = load_rules();
@@ -162,7 +162,7 @@ fn test_fallback_decision_on_miss() {
 
 #[test]
 fn test_gate_denied_app_blocks_action() {
-    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let _iso = IsolatedHome::new("uia_test");
     let snapshot = load_rules();
     // Save a deny rule for "password-vault"
     {

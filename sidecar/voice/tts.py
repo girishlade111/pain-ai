@@ -121,6 +121,17 @@ def _generate_piper_tts(text: str, voice: str, output_path: Path) -> Optional[in
     return None
 
 
+def _redact(text: str) -> str:
+    """P13: strip key material from provider error text before logging."""
+    import re
+    out = str(text)
+    for pattern in (r"sk-[A-Za-z0-9_\-]{8,}", r"Bearer\s+[\w.\-~+/=]+",
+                    r"ghp_[A-Za-z0-9]{10,}", r"AIza[0-9A-Za-z_\-]{10,}",
+                    r"api[_-]?key\s*[:=]\s*['\"]?[\w.\-~+/=]+['\"]?"):
+        out = re.sub(pattern, "[REDACTED]", out)
+    return out
+
+
 def _generate_cloud_tts(text: str, engine: str, output_path: Path) -> Optional[int]:
     """Attempts cloud TTS (OpenAI / Edge / ElevenLabs) if configured."""
     # 1. Edge-TTS (free, zero-key)
@@ -152,7 +163,8 @@ def _generate_cloud_tts(text: str, engine: str, output_path: Path) -> Optional[i
             response.stream_to_file(str(output_path))
             return 600
         except Exception as e:
-            logger.warning(f"OpenAI TTS failed: {e}")
+            # P13: provider errors can echo request details — never log raw.
+            logger.warning(f"OpenAI TTS failed: {_redact(str(e))}")
 
     return None
 

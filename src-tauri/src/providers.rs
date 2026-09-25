@@ -217,7 +217,14 @@ fn save_config_to(cfg: &ActiveConfig, path: &std::path::Path) -> Result<(), Stri
     // SECURITY: ActiveConfig must never carry key material. This assert runs on
     // every write so a future field cannot silently persist a secret to disk.
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    debug_assert_no_secret(&json);
+    // SECURITY (P13): always-on in every profile (debug_assert compiles out
+    // of release builds) so a future field cannot silently persist a secret.
+    if let Some(marker) = find_secret_marker(&json) {
+        return Err(format!(
+            "refusing to persist provider config containing key material ({}…)",
+            marker
+        ));
+    }
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -226,13 +233,24 @@ fn save_config_to(cfg: &ActiveConfig, path: &std::path::Path) -> Result<(), Stri
 }
 
 /// Best-effort secret sniff over serialized config. Never logs the value.
-fn debug_assert_no_secret(json: &str) {
-    for marker in ["sk-", "ghp_", "xoxb-", "xoxa-", "xoxp-", "AIza"] {
-        debug_assert!(
-            !json.contains(marker),
-            "provider config must never contain key material"
-        );
+fn find_secret_marker(json: &str) -> Option<&'static str> {
+    for marker in [
+        "sk-",
+        "ghp_",
+        "gho_",
+        "github_pat_",
+        "xoxb-",
+        "xoxa-",
+        "xoxp-",
+        "xoxo-",
+        "AIza",
+        "PRIVATE KEY",
+    ] {
+        if json.contains(marker) {
+            return Some(marker);
+        }
     }
+    None
 }
 
 /// Validate a provider base URL without new dependencies.
@@ -260,10 +278,13 @@ pub fn validate_base_url(raw: &str) -> Result<String, String> {
         .split(['/', '?', '#'])
         .next()
         .unwrap_or("");
-    let host_port = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or("");
+    // SECURITY (P13): embedded credentials (user:pass@host) would ride along
+    // on every request AND risk landing in diagnostics. Reject outright —
+    // key material belongs in the OS keychain, never in URLs.
+    if authority.contains('@') {
+        return Err("Endpoint URL must not embed credentials (user:pass@host); store secrets in the OS keychain".into());
+    }
+    let host_port = authority;
     // Drop an optional :port suffix (exactly one colon + numeric port).
     // IPv6 literals ([::1]) keep their brackets until normalization below.
     let host_raw = if host_port.starts_with('[') {
@@ -505,14 +526,45 @@ pub fn key_delete(provider_id: String) -> Result<(), String> {
 }
 
 fn sanitize_error(err_str: &str) -> String {
-    // Redact any potential tokens or secrets
+    // Redact any potential tokens or secrets. Markers cover OpenAI-style,
+    // GitHub, Slack, Google keys plus Bearer credential echoes.
     let mut out = err_str.to_string();
-    if let Some(start) = out.find("sk-") {
-        let end = out[start..]
-            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-            .map(|offset| start + offset)
-            .unwrap_or(out.len());
-        out.replace_range(start..end, "[REDACTED_API_KEY]");
+    for marker in [
+        "sk-",
+        "ghp_",
+        "gho_",
+        "github_pat_",
+        "xoxb-",
+        "xoxa-",
+        "xoxp-",
+        "xoxo-",
+        "AIza",
+        "Bearer ",
+        "bearer ",
+    ] {
+        loop {
+            let Some(start) = out.find(marker) else {
+                break;
+            };
+            // Scan for the token end AFTER the marker (the marker itself may
+            // end in a terminator, e.g. the space in "Bearer ").
+            let scan_from = start + marker.len();
+            let end = out[scan_from..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.'))
+                .map(|offset| scan_from + offset)
+                .unwrap_or(out.len());
+            // Never redact the whole message when nothing follows the marker.
+            if end == scan_from {
+                break;
+            }
+            // Scheme words ("Bearer ") are not secret — keep the label so
+            // diagnostics stay readable while the credential is dropped.
+            if marker.ends_with(' ') {
+                out.replace_range(scan_from..end, "[REDACTED]");
+            } else {
+                out.replace_range(start..end, "[REDACTED]");
+            }
+        }
     }
     out
 }

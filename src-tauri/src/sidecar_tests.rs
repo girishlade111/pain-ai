@@ -24,6 +24,16 @@ fn lock_shared_state() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
+fn test_sidecar_token_is_csprng_sized_unique() {
+    // P13: 32 OS-random bytes, hex-encoded (64 chars), unique per call.
+    let a = SidecarManager::generate_token();
+    let b = SidecarManager::generate_token();
+    assert_eq!(a.len(), 64, "token must be 32 bytes hex-encoded");
+    assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "token must be hex");
+    assert_ne!(a, b, "consecutive tokens must differ (CSPRNG)");
+}
+
+#[test]
 fn test_parse_engine_identity() {
     let parsed = SidecarManager::parse_engine_identity("lsc-engine 0.1.0 e2168f7136cf\n");
     assert_eq!(

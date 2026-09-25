@@ -22,6 +22,41 @@ from sidecar.quarantine import scan_skill_directory
 
 logger = logging.getLogger("skills_manager")
 
+def _resolve_home() -> Path:
+    """Phase 13: home dir resolved dynamically (not frozen at import) so
+    tests can redirect ALL state with PAIN_AI_HOME/HERMES_HOME env vars and
+    never touch the operator's live ~/.pain-ai. Production behavior
+    unchanged (env unset → ~/.pain-ai)."""
+    env_home = os.environ.get("PAIN_AI_HOME", "").strip() or \
+        os.environ.get("HERMES_HOME", "").strip()
+    if env_home:
+        return Path(env_home)
+    return Path.home() / ".pain-ai"
+
+
+def _user_skills_dir() -> Path:
+    return _resolve_home() / "skills"
+
+
+def _hub_dir() -> Path:
+    return _user_skills_dir() / ".hub"
+
+
+def _lock_file() -> Path:
+    return _hub_dir() / "lock.json"
+
+
+def _trust_file() -> Path:
+    return _resolve_home() / "trusted_skills.json"
+
+
+def _drafts_dir() -> Path:
+    return _resolve_home() / "skill-drafts"
+
+
+# Legacy module constants (import-time snapshot of the default home). Kept
+# for backward-compatible reads; all WRITES and listings go through the
+# dynamic helpers above so env isolation is honored.
 PAIN_AI_HOME = Path.home() / ".pain-ai"
 USER_SKILLS_DIR = PAIN_AI_HOME / "skills"
 HUB_DIR = USER_SKILLS_DIR / ".hub"
@@ -120,13 +155,13 @@ def ensure_bundled_skills_visible(home: Optional[Path] = None) -> bool:
 
 
 def _ensure_dirs():
-    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    HUB_DIR.mkdir(parents=True, exist_ok=True)
-    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not LOCK_FILE.exists():
-        LOCK_FILE.write_text("{}", encoding="utf-8")
-    if not TRUST_FILE.exists():
-        TRUST_FILE.write_text("{}", encoding="utf-8")
+    _user_skills_dir().mkdir(parents=True, exist_ok=True)
+    _hub_dir().mkdir(parents=True, exist_ok=True)
+    _drafts_dir().mkdir(parents=True, exist_ok=True)
+    if not _lock_file().exists():
+        _lock_file().write_text("{}", encoding="utf-8")
+    if not _trust_file().exists():
+        _trust_file().write_text("{}", encoding="utf-8")
 
 
 def parse_frontmatter(content: str) -> Tuple[Dict[str, Any], str]:
@@ -165,7 +200,7 @@ def get_trusted_records() -> Dict[str, Any]:
     """Returns workspace skill trust records from trusted_skills.json."""
     _ensure_dirs()
     try:
-        return json.loads(TRUST_FILE.read_text(encoding="utf-8"))
+        return json.loads(_trust_file().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -180,7 +215,7 @@ def set_skill_trust(workspace: str, skill_name: str, trust: bool) -> Dict[str, A
         records[norm_ws] = {}
 
     records[norm_ws][skill_name] = trust
-    TRUST_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    _trust_file().write_text(json.dumps(records, indent=2), encoding="utf-8")
     return {"workspace": norm_ws, "skill": skill_name, "trusted": trust}
 
 
@@ -198,7 +233,7 @@ def get_lockfile() -> Dict[str, Any]:
     """Reads ~/.pain-ai/skills/.hub/lock.json."""
     _ensure_dirs()
     try:
-        return json.loads(LOCK_FILE.read_text(encoding="utf-8"))
+        return json.loads(_lock_file().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -211,7 +246,7 @@ def update_lockfile(skill_name: str, record: Optional[Dict[str, Any]]) -> None:
         lock.pop(skill_name, None)
     else:
         lock[skill_name] = record
-    LOCK_FILE.write_text(json.dumps(lock, indent=2), encoding="utf-8")
+    _lock_file().write_text(json.dumps(lock, indent=2), encoding="utf-8")
 
 
 def _read_skill_from_dir(dir_path: Path, source_tag: str, workspace: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -280,8 +315,8 @@ def skills_list(workspace: Optional[str] = None) -> List[Dict[str, Any]]:
                     by_name[s["name"]] = s
 
     # 2. User installed skills (~/.pain-ai/skills/)
-    if USER_SKILLS_DIR.is_dir():
-        for entry in USER_SKILLS_DIR.iterdir():
+    if _user_skills_dir().is_dir():
+        for entry in _user_skills_dir().iterdir():
             if entry.is_dir() and entry.name != ".hub" and (entry / "SKILL.md").exists():
                 s = _read_skill_from_dir(entry, "user")
                 if s:
@@ -378,7 +413,7 @@ def hub_install(skill_source_path: str, tap: str = "official") -> Dict[str, Any]
         }
 
     # 2. Copy into user skills directory
-    dest = USER_SKILLS_DIR / skill_name
+    dest = _user_skills_dir() / skill_name
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
@@ -416,7 +451,7 @@ def hub_audit() -> Dict[str, Any]:
     _ensure_dirs()
     report: Dict[str, Any] = {"total_scanned": 0, "clean": True, "skills": {}}
 
-    for entry in USER_SKILLS_DIR.iterdir():
+    for entry in _user_skills_dir().iterdir():
         if entry.is_dir() and entry.name != ".hub" and (entry / "SKILL.md").exists():
             report["total_scanned"] += 1
             res = scan_skill_directory(entry)
@@ -430,7 +465,7 @@ def hub_audit() -> Dict[str, Any]:
 def hub_remove(skill_name: str) -> Dict[str, Any]:
     """Removes an installed skill from ~/.pain-ai/skills/ and updates lockfile."""
     _ensure_dirs()
-    target = USER_SKILLS_DIR / skill_name
+    target = _user_skills_dir() / skill_name
     if target.exists():
         shutil.rmtree(target)
     update_lockfile(skill_name, None)
@@ -444,7 +479,7 @@ def learn_draft_propose(name: str, description: str, content: str) -> Dict[str, 
     """Creates a new /learn draft awaiting explicit user approval."""
     _ensure_dirs()
     draft_id = f"draft-{int(time.time())}-{name}"
-    draft_file = DRAFTS_DIR / f"{draft_id}.json"
+    draft_file = _drafts_dir() / f"{draft_id}.json"
 
     meta, _ = parse_frontmatter(content)
     draft_data = {
@@ -465,7 +500,7 @@ def learn_drafts_list() -> List[Dict[str, Any]]:
     """Lists pending /learn skill drafts."""
     _ensure_dirs()
     drafts: List[Dict[str, Any]] = []
-    for f in DRAFTS_DIR.glob("*.json"):
+    for f in _drafts_dir().glob("*.json"):
         try:
             drafts.append(json.loads(f.read_text(encoding="utf-8")))
         except Exception:
@@ -476,7 +511,7 @@ def learn_drafts_list() -> List[Dict[str, Any]]:
 def learn_draft_approve(draft_id: str) -> Dict[str, Any]:
     """Approves a /learn draft, writes to user skills with guard_agent_created: true."""
     _ensure_dirs()
-    draft_file = DRAFTS_DIR / f"{draft_id}.json"
+    draft_file = _drafts_dir() / f"{draft_id}.json"
     if not draft_file.exists():
         return {"ok": False, "error": f"Draft '{draft_id}' not found"}
 
@@ -495,7 +530,7 @@ def learn_draft_approve(draft_id: str) -> Dict[str, Any]:
         }
 
     # Write to user skills
-    target_dir = USER_SKILLS_DIR / name
+    target_dir = _user_skills_dir() / name
     target_dir.mkdir(parents=True, exist_ok=True)
     target_file = target_dir / "SKILL.md"
     target_file.write_text(content, encoding="utf-8")
@@ -508,7 +543,7 @@ def learn_draft_approve(draft_id: str) -> Dict[str, Any]:
 def learn_draft_reject(draft_id: str) -> Dict[str, Any]:
     """Rejects and purges a /learn draft."""
     _ensure_dirs()
-    draft_file = DRAFTS_DIR / f"{draft_id}.json"
+    draft_file = _drafts_dir() / f"{draft_id}.json"
     if draft_file.exists():
         draft_file.unlink()
     return {"ok": True, "rejected": draft_id}

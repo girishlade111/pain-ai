@@ -534,6 +534,9 @@ mod doctor_tests {
 
     #[test]
     fn test_doctor_rules_and_trust_check() {
+        // P13: isolate HOME so the assertion is deterministic (live
+        // rules.json content must not decide unit-test outcomes).
+        let _iso = crate::gate::IsolatedHome::new("doctor_rules");
         let res = check_rules_and_trust();
         assert_eq!(res.status, DoctorStatus::Pass, "Rules and trust check failed: {:?}", res);
     }
@@ -558,6 +561,9 @@ mod doctor_tests {
 
     #[tokio::test]
     async fn test_doctor_run_all_seven_checks() {
+        // P13: same HOME isolation as above (rules check is inside the suite).
+        // Note: takes the rules mutex — never hold it across .await elsewhere.
+        let _iso = crate::gate::IsolatedHome::new("doctor_all_seven");
         let results = doctor_run().await;
         assert_eq!(results.len(), 7, "Doctor suite must execute exactly 7 checks");
         for r in &results {

@@ -161,3 +161,11 @@ git push origin v1.0.0
 - Proof: real PyInstaller build (6820 files/477MB → 173MB NSIS), silent install to `%LOCALAPPDATA%\pain ai`, neutral-CWD launch: app alive, bundled engine validated (v0.1.0/sha e2168f71), healthz 200, skills 6/6, memory R/W, TTS WAV, honest missing-key chat error. Evidence: `release-evidence/p12-installed-verification.md`.
 - Tests: Rust 124/124 · Python 112/112 · tsc 0 errors · vite clean.
 - Gaps left for GA sign-off: sign the installer (Smart App Control blocked the rebuilt unsigned setup; keys outside repo per policy) and run one with-model turn with real BYOK creds (none on this box).
+
+## P13 Security Hardening Pass (2026-09-22)
+- Auth: Bearer on all `/v1/*` except `/healthz` (was ~25 open); frontend direct fetches attach token; CORS `*` → tauri://localhost + localhost:1420; CSPRNG sidecar token (getrandom) + rotation on restart; `/v1/approve` unknown-id→404 (removed oldest-pending fallback).
+- Gate: command normalization (case/space/quote/caret + `-EncodedCommand` base64 decode-and-recheck) + download-cradle/persistence patterns; fixed dead workspace `deny:` prefix; secrets redacted in persisted grants; 300s pending sweep.
+- FS: post-approval canonical path validation (NUL/`..` reject, symlink resolve, OS system-location denylist with junction-proof lexical compare).
+- Hygiene: config persist refuses key material in ALL profiles; URLs with userinfo rejected; error redaction widened; MCP `.env` owner-only (0600/Windows DACL); Connectors key cleared post-save.
+- Isolation: Rust IsolatedHome (PAIN_AI_HOME per test + shared lock) across gate/uia/atspi/capture/context/doctor/commands tests; Python skills home dynamic + hub-test setUp/tearDown + bridge-test autouse fixture (fixed voice-model starvation via collection-time env discipline).
+- Tests: Rust 140/140 · Python 119+1skip (venv) · tsc 0 · vite clean. No critical regressions; with-model live turns still need BYOK creds.

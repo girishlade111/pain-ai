@@ -1,6 +1,6 @@
 use super::*;
 use crate::gate::Rule;
-use crate::gate::TEST_RULES_MUTEX;
+use crate::gate::IsolatedHome;
 
 fn sample_node(id: &str, name: &str, role: &str, aid: Option<&str>, class: Option<&str>) -> Node {
     Node {
@@ -220,7 +220,7 @@ fn test_x11_input_always_supported() {
 
 #[test]
 fn test_atspi_gate_denied_app_blocks_action() {
-    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let _iso = IsolatedHome::new("atspi_test");
     let snapshot = load_rules();
     store_deny_rule_for_test();
     let res = ui_act(
@@ -249,7 +249,7 @@ fn store_deny_rule_for_test() {
 
 #[test]
 fn test_atspi_fallback_decision_on_miss() {
-    let _guard = TEST_RULES_MUTEX.lock().unwrap();
+    let _iso = IsolatedHome::new("atspi_test");
     let snapshot = load_rules();
     {
         let mut store = load_rules();

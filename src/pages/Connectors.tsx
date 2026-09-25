@@ -125,6 +125,8 @@ export function Connectors() {
       showToast(`Error: failed to connect server (${err})`);
     } finally {
       setSaving(false);
+      // P13: drop key material from renderer memory immediately after use.
+      setConfigForm((prev) => ({ ...prev, apiKey: '' }));
     }
   };
 

@@ -240,11 +240,46 @@ def _write_dotenv_var(name: str, value: Optional[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(lines)
     path.write_text((text + "\n") if text else "", encoding="utf-8")
+    _lock_secret_file(path)
+
+
+def _lock_secret_file(path) -> None:
+    """Owner-only permissions for key-material files (HERMES_HOME/.env).
+
+    POSIX: mode 0600. Windows: explicit owner-only DACL via win32security
+    (inherited profile ACLs alone are broader than necessary). Best-effort:
+    failures are logged, never fatal — the write already happened.
+    """
+    import logging
+    log = logging.getLogger("mcp_manager")
     if platform.system() != "Windows":
         try:
             os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-        except OSError:
-            pass
+        except OSError as exc:
+            log.warning("could not chmod 0600 %s: %s", path, exc)
+        return
+    try:
+        import win32security
+        import ntsecuritycon as _ntsec
+    except ImportError as exc:
+        log.warning("win32security unavailable; .env inherits profile ACLs: %s", exc)
+        return
+    try:
+        user, _, _ = win32security.LookupAccountName("", win32security.GetUserName())
+        admins, _, _ = win32security.LookupAccountName("", "Administrators")
+        system, _, _ = win32security.LookupAccountName("", "SYSTEM")
+        dacl = win32security.ACL()
+        for sid in (user, system, admins):
+            dacl.AddAccessAllowedAce(
+                win32security.ACL_REVISION,
+                _ntsec.FILE_GENERIC_READ | _ntsec.FILE_GENERIC_WRITE | _ntsec.DELETE,
+                sid,
+            )
+        sd = win32security.GetFileSecurity(str(path), win32security.DACL_SECURITY_INFORMATION)
+        sd.SetSecurityDescriptorDacl(1, dacl, 0)
+        win32security.SetFileSecurity(str(path), win32security.DACL_SECURITY_INFORMATION, sd)
+    except Exception as exc:
+        log.warning("could not set owner-only DACL on %s: %s", path, exc)
 
 
 def _find_key_slots(server_cfg: Dict[str, Any]) -> List[str]:

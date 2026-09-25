@@ -1,4 +1,5 @@
 use super::*;
+use crate::gate::IsolatedHome;
 use std::fs;
 use std::time::Instant;
 
@@ -96,6 +97,8 @@ fn test_atomic_file_write() {
 
 #[tokio::test]
 async fn test_shell_exec_timeout_kill() {
+    // P13: isolate HOME (shell_exec evaluations append to the audit log).
+    let _iso = IsolatedHome::new("shell_exec_timeout");
     // We run a command that would sleep for 3 seconds, but set timeout to 200ms
     #[cfg(windows)]
     let cmd = "powershell -Command Start-Sleep -Seconds 3".to_string();
@@ -119,4 +122,63 @@ async fn test_shell_exec_timeout_kill() {
         }
         other => panic!("Unexpected shell_exec output: {:?}", other),
     }
+}
+
+// -----------------------------------------------------------------------------
+// Test Suite: P13 Safe Path Validation
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_p13_validate_rejects_empty_and_nul() {
+    assert!(validate_fs_target("", false).is_err());
+    assert!(validate_fs_target("", true).is_err());
+    assert!(validate_fs_target("a\0b.txt", false).is_err());
+    assert!(validate_fs_target("a\0b.txt", true).is_err());
+}
+
+#[test]
+fn test_p13_validate_write_blocks_dotdot_escape() {
+    // `..` above the nearest existing ancestor must fail closed.
+    let base = std::env::temp_dir().join("pain-ai-p13-fs");
+    let _ = fs::create_dir_all(base.join("sub"));
+    let evil = format!("{}/sub/../../evil.txt", base.display()).replace('\\', "/");
+    assert!(validate_fs_target(&evil, true).is_err(), "dotdot escape must fail");
+    // Benign sibling write resolves fine.
+    let ok = format!("{}/sub/note.txt", base.display()).replace('\\', "/");
+    let canon = validate_fs_target(&ok, true).expect("sibling write must validate");
+    assert!(canon.ends_with("note.txt"));
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_p13_validate_write_blocks_system_locations() {
+    #[cfg(target_os = "windows")]
+    let sys_target = std::env::var("SystemRoot")
+        .map(|r| format!("{}/System32/p13-probe.txt", r))
+        .unwrap_or_else(|_| "C:/Windows/System32/p13-probe.txt".to_string());
+    #[cfg(not(target_os = "windows"))]
+    let sys_target = "/etc/p13-probe.conf".to_string();
+    let err = validate_fs_target(&sys_target, true).expect_err("system write must be denied");
+    assert!(err.contains("protected system location"), "unexpected error: {}", err);
+}
+
+#[test]
+fn test_p13_validate_read_canonicalizes_symlink() {
+    let base = std::env::temp_dir().join("pain-ai-p13-link");
+    let _ = fs::create_dir_all(&base);
+    let real = base.join("real.txt");
+    fs::write(&real, b"link target").unwrap();
+    #[cfg(target_os = "windows")]
+    let link = base.join("alias.lnk.txt");
+    #[cfg(not(target_os = "windows"))]
+    let link = base.join("alias.txt");
+    #[cfg(target_os = "windows")]
+    let made = std::os::windows::fs::symlink_file(&real, &link).is_ok();
+    #[cfg(not(target_os = "windows"))]
+    let made = std::os::unix::fs::symlink(&real, &link).is_ok();
+    if made {
+        let canon = validate_fs_target(link.to_str().unwrap(), false).expect("link must resolve");
+        assert_eq!(canon, real.canonicalize().unwrap());
+    }
+    let _ = fs::remove_dir_all(&base);
 }

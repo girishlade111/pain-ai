@@ -16,6 +16,158 @@ pub const DEFAULT_SHELL_TIMEOUT_MS: u64 = 30_000; // 30 seconds
 pub const MAX_SHELL_TIMEOUT_MS: u64 = 600_000; // 10 minutes
 
 // -----------------------------------------------------------------------------
+// Safe Path Validation (P13 defense-in-depth behind the gate)
+// -----------------------------------------------------------------------------
+
+/// System locations that writes/patches may never target, even when the
+/// operator approved the action text. Compared against the CANONICAL path so
+/// `..` segments and symlinks cannot escape the check. Reads are NOT
+/// denylisted (the agent must read user files anywhere; exfiltration is a
+/// gate-policy concern) but ARE canonicalized so audit sees through links.
+/// (subtree roots, exact paths). Subtree roots deny everything beneath them;
+/// exact paths deny only themselves (a drive/filesystem root must not
+/// swallow the whole volume — that false-positives every user file).
+fn system_write_denylist() -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut subtrees = Vec::new();
+    let mut exact: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(root) = std::env::var("SystemRoot") {
+            subtrees.push(PathBuf::from(&root));
+        } else {
+            subtrees.push(PathBuf::from(r"C:\Windows"));
+        }
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramData"] {
+            if let Ok(dir) = std::env::var(var) {
+                subtrees.push(PathBuf::from(dir));
+            }
+        }
+        // Top-level OS-managed dirs on the system drive (exact names only —
+        // user profiles and user data on the same drive stay writable).
+        if let Ok(drive) = std::env::var("SystemDrive") {
+            for name in [
+                "$Recycle.Bin",
+                "System Volume Information",
+                "Recovery",
+                "Documents and Settings",
+            ] {
+                subtrees.push(PathBuf::from(format!("{}\\{}", drive, name)));
+            }
+            exact.push(PathBuf::from(format!("{}\\", drive)));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        for dir in ["/etc", "/proc", "/sys", "/dev", "/boot", "/root"] {
+            subtrees.push(PathBuf::from(dir));
+        }
+        exact.push(PathBuf::from("/"));
+    }
+    (subtrees, exact)
+}
+
+/// Lexical normalization for denylist comparison: uppercased backslash
+/// form with any `\\?\` verbatim prefix stripped.
+///
+/// P13 lesson: NEVER `canonicalize()` the denylist roots — `C:\Documents and
+/// Settings` is a junction into `C:\Users`, so resolving it silently widens
+/// the entry to every user profile (false-positive denies). Lexical,
+/// case-insensitive comparison is junction-proof; the CANDIDATE side stays
+/// canonical (symlinks/`..` already resolved by the caller).
+fn normalized_for_deny(p: &Path) -> String {
+    let s = p.as_os_str().to_string_lossy().replace('/', "\\").to_uppercase();
+    let no_verbatim = s.strip_prefix("\\\\?\\").unwrap_or(&s);
+    no_verbatim.strip_prefix("UNC\\").unwrap_or(no_verbatim).to_string()
+}
+
+fn is_path_denied(canon: &Path, denylist: &(Vec<PathBuf>, Vec<PathBuf>)) -> bool {
+    let n = normalized_for_deny(canon);
+    denylist.0.iter().any(|d| {
+        let r = normalized_for_deny(d);
+        n == r || n.starts_with(&format!("{}\\", r))
+    }) || denylist.1.iter().any(|d| n == normalized_for_deny(d))
+}
+
+/// Validate a filesystem target AFTER gate approval. `for_write` selects the
+/// system-location denylist. Returns the canonical path on success.
+/// Fails closed on: NUL bytes, unresolvable paths (reads), denylisted
+/// canonical locations (writes).
+pub fn validate_fs_target(raw: &str, for_write: bool) -> Result<PathBuf, String> {
+    if raw.is_empty() {
+        return Err("File path must not be empty".to_string());
+    }
+    if raw.contains('\0') {
+        return Err("File path contains NUL byte".to_string());
+    }
+    let requested = PathBuf::from(raw);
+    if for_write {
+        // P13: reject `..` segments in write targets outright. `exists()`
+        // resolves `..` before checking, so `sub/../../evil.txt` would
+        // silently land outside the directory the operator approved. The
+        // explicit error tells the operator to use the resolved path.
+        use std::path::Component;
+        if requested.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(format!(
+                "Refusing write with '..' in path (use the resolved location instead): '{}'",
+                raw
+            ));
+        }
+        // Canonicalize the nearest existing ancestor, then re-append the
+        // remainder lexically so symlinks cannot escape it silently.
+        let (ancestor, remainder) = split_existing_ancestor(&requested);
+        let canon_ancestor = ancestor
+            .canonicalize()
+            .map_err(|e| format!("Cannot resolve output location '{}': {}", raw, e))?;
+        let mut canon = canon_ancestor;
+        for seg in remainder {
+            let s = seg.to_string_lossy();
+            if s == ".." {
+                // `..` above the resolved ancestor is an escape attempt.
+                return Err(format!("Refusing path with '..' above existing directory: '{}'", raw));
+            }
+            if s == "." || s.is_empty() {
+                continue;
+            }
+            canon.push(seg);
+        }
+        let denylist = system_write_denylist();
+        if is_path_denied(&canon, &denylist) {
+            return Err(format!(
+                "Refusing write to protected system location '{}'",
+                canon.display()
+            ));
+        }
+        return Ok(canon);
+    }
+    // Reads: target must exist; canonicalize (follows symlinks) so the
+    // opened file is exactly the resolved one (TOCTOU aside, v1 scope).
+    requested.canonicalize().map_err(|e| format!("Cannot resolve '{}': {}", raw, e))
+}
+
+/// Split a path into nearest existing ancestor + remaining trailing names
+/// (owned strings — no lifetime juggling).
+fn split_existing_ancestor(path: &Path) -> (PathBuf, Vec<std::ffi::OsString>) {
+    let mut cursor = path.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if cursor.exists() {
+            tail.reverse();
+            return (cursor, tail);
+        }
+        match cursor.file_name().map(|s| s.to_os_string()) {
+            Some(name) => {
+                tail.push(name);
+                cursor.pop();
+            }
+            None => {
+                tail.reverse();
+                return (cursor, tail);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Data Structures & Results
 // -----------------------------------------------------------------------------
 
@@ -324,6 +476,11 @@ pub async fn file_read(
                     message: format!("File not found: {}", path),
                 };
             }
+            // P13: resolve symlinks/`..` so the opened file is the canonical one.
+            let file_path = match validate_fs_target(&path, false) {
+                Ok(p) => p,
+                Err(e) => return CommandOutput::Error { message: e },
+            };
 
             let meta = match fs::metadata(&file_path) {
                 Ok(m) => m,
@@ -420,6 +577,11 @@ pub async fn file_search(
                     message: format!("Directory not found: {}", dir),
                 };
             }
+            // P13: canonicalize the search root (symlink-transparent).
+            let root = match validate_fs_target(&dir, false) {
+                Ok(p) => p,
+                Err(e) => return CommandOutput::Error { message: e },
+            };
 
             let mut matches = Vec::new();
             let query_lower = query.to_lowercase();
@@ -508,7 +670,12 @@ pub async fn file_write(
                 };
             }
 
-            let target_path = PathBuf::from(&path);
+            // P13: post-approval path validation (system-location denylist
+            // on the canonical path; `..`/symlink escapes fail closed).
+            let target_path = match validate_fs_target(&path, true) {
+                Ok(p) => p,
+                Err(e) => return CommandOutput::Error { message: e },
+            };
             match atomic_write_file(&target_path, content.as_bytes()) {
                 Ok(_) => CommandOutput::Success {
                     data: FileWriteResult {
@@ -550,6 +717,12 @@ pub async fn file_patch(
                     message: format!("Target file for patch not found: {}", path),
                 };
             }
+            // P13: canonicalize + denylist (patch target must exist, so a
+            // direct canonical validation applies).
+            let target_path = match validate_fs_target(&path, true) {
+                Ok(p) => p,
+                Err(e) => return CommandOutput::Error { message: e },
+            };
 
             let original = match fs::read_to_string(&target_path) {
                 Ok(s) => s,

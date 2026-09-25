@@ -218,10 +218,19 @@ app = FastAPI(title="pain ai Hermes Sidecar Bridge", version=BRIDGE_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # SECURITY (P13): explicit Tauri origins only — the desktop WebView
+    # (prod `tauri://localhost`, dev `localhost:1420`) is the sole browser
+    # client (Bearer header carries auth; no cookies, so no credentials).
+    # The previous `allow_origins=["*"]` let any website probe the loopback
+    # sidecar from the operator's browser.
+    allow_origins=[
+        "tauri://localhost",
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Active pending approval trackers: approval_id -> metadata
@@ -396,7 +405,8 @@ async def healthz():
 
 
 @app.get("/v1/tools")
-async def get_tools():
+async def get_tools(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     """List available gate-first tools with Hermes-compatible schemas."""
     return {"tools": FILE_TOOL_SCHEMAS + UI_TOOL_SCHEMAS}
 
@@ -476,12 +486,12 @@ async def approve_action(req: ApproveRequest, authorization: Optional[str] = Hea
     """
     verify_bearer_token(authorization)
     appr_id = req.approval_id
+    # SECURITY (P13): an approval ID resolves ONLY its own request. The old
+    # fallback (unknown id → oldest pending approval) let a mismatched or
+    # replayed decision authorize an unrelated action. Unknown ids are 404.
     if appr_id not in pending_approvals:
-        if pending_approvals:
-            appr_id = next(iter(pending_approvals))
-            logger.warning(f"Unknown approval id '{req.approval_id}'; falling back to oldest pending '{appr_id}'")
-        else:
-            raise HTTPException(status_code=404, detail=f"Approval ID '{appr_id}' not found or already resolved")
+        logger.warning(f"Approve rejected: unknown approval id '{req.approval_id}'")
+        raise HTTPException(status_code=404, detail=f"Approval ID '{appr_id}' not found or already resolved")
 
     meta = pending_approvals[appr_id]
     session_key = meta.get("session_key", "default")
@@ -596,12 +606,14 @@ class McpExecuteRequest(BaseModel):
 
 # --- Skills & Hub Endpoints ---
 @app.get("/v1/skills")
-async def get_skills(workspace: Optional[str] = None):
+async def get_skills(workspace: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"skills": mgr_skills_list(workspace=workspace)}
 
 
 @app.get("/v1/skills/{name}")
-async def get_skill_detail(name: str, subpath: Optional[str] = None, workspace: Optional[str] = None):
+async def get_skill_detail(name: str, subpath: Optional[str] = None, workspace: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     res = mgr_skill_view(name, subpath=subpath, workspace=workspace)
     if not res.get("ok"):
         raise HTTPException(status_code=404, detail=res.get("error", "Skill not found"))
@@ -609,17 +621,20 @@ async def get_skill_detail(name: str, subpath: Optional[str] = None, workspace: 
 
 
 @app.post("/v1/skills/trust")
-async def post_skill_trust(req: TrustRequest):
+async def post_skill_trust(req: TrustRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return mgr_set_skill_trust(req.workspace, req.skill_name, req.trust)
 
 
 @app.get("/v1/skills/hub/browse")
-async def get_hub_browse():
+async def get_hub_browse(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"skills": mgr_skills_list()}
 
 
 @app.post("/v1/skills/hub/install")
-async def post_hub_install(req: HubInstallRequest):
+async def post_hub_install(req: HubInstallRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     res = mgr_hub_install(req.source_path, tap=req.tap or "official")
     if not res.get("ok"):
         return JSONResponse(status_code=400, content=res)
@@ -627,22 +642,26 @@ async def post_hub_install(req: HubInstallRequest):
 
 
 @app.post("/v1/skills/hub/audit")
-async def post_hub_audit():
+async def post_hub_audit(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return mgr_hub_audit()
 
 
 @app.post("/v1/skills/hub/remove")
-async def post_hub_remove(req: HubRemoveRequest):
+async def post_hub_remove(req: HubRemoveRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return mgr_hub_remove(req.skill_name)
 
 
 @app.get("/v1/learn/drafts")
-async def get_learn_drafts():
+async def get_learn_drafts(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"drafts": mgr_learn_drafts_list()}
 
 
 @app.post("/v1/learn/drafts/{draft_id}/approve")
-async def post_learn_approve(draft_id: str):
+async def post_learn_approve(draft_id: str, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     res = mgr_learn_draft_approve(draft_id)
     if not res.get("ok"):
         return JSONResponse(status_code=400, content=res)
@@ -650,18 +669,21 @@ async def post_learn_approve(draft_id: str):
 
 
 @app.post("/v1/learn/drafts/{draft_id}/reject")
-async def post_learn_reject(draft_id: str):
+async def post_learn_reject(draft_id: str, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return mgr_learn_draft_reject(draft_id)
 
 
 # --- MCP Connectors Endpoints ---
 @app.get("/v1/mcp/servers")
-async def get_mcp_servers(workspace: Optional[str] = None):
+async def get_mcp_servers(workspace: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"servers": mgr_mcp_list(workspace=workspace)}
 
 
 @app.post("/v1/mcp/toggle")
-async def post_mcp_toggle(req: McpToggleRequest):
+async def post_mcp_toggle(req: McpToggleRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     try:
         return mgr_mcp_toggle(req.server_id, req.enable, workspace=req.workspace)
     except ValueError as exc:
@@ -669,7 +691,8 @@ async def post_mcp_toggle(req: McpToggleRequest):
 
 
 @app.post("/v1/mcp/configure")
-async def post_mcp_configure(req: McpConfigureRequest):
+async def post_mcp_configure(req: McpConfigureRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     try:
         return mgr_mcp_configure_key(req.server_id, req.api_key)
     except ValueError as exc:
@@ -677,7 +700,8 @@ async def post_mcp_configure(req: McpConfigureRequest):
 
 
 @app.get("/v1/mcp/tools")
-async def get_mcp_tools(workspace: Optional[str] = None):
+async def get_mcp_tools(workspace: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"tools": mgr_mcp_get_active_tools(workspace=workspace)}
 
 
@@ -719,12 +743,14 @@ async def post_mcp_execute(req: McpExecuteRequest, authorization: Optional[str] 
 
 # --- Artifact Tracking Endpoints (Phase 6) ---
 @app.get("/v1/artifacts")
-async def get_artifacts(session_id: Optional[str] = None, limit: int = 50):
+async def get_artifacts(session_id: Optional[str] = None, limit: int = 50, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"groups": artifact_list_groups(session_id=session_id, limit=limit)}
 
 
 @app.get("/v1/artifacts/{group_id}")
-async def get_artifact_group(group_id: str):
+async def get_artifact_group(group_id: str, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     group = artifact_get_group(group_id)
     if group is None:
         raise HTTPException(status_code=404, detail=f"Artifact group '{group_id}' not found")
@@ -801,12 +827,14 @@ class MemoryEditRequest(BaseModel):
 
 
 @app.get("/v1/memory")
-async def get_memory(target: str = "memory"):
+async def get_memory(target: str = "memory", authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return get_memory_manager().get_memory(target)
 
 
 @app.post("/v1/memory")
-async def post_memory(req: MemoryEditRequest):
+async def post_memory(req: MemoryEditRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     res = get_memory_manager().update_memory(req.target, req.content)
     if not res.get("ok"):
         return JSONResponse(status_code=400, content=res)
@@ -815,7 +843,8 @@ async def post_memory(req: MemoryEditRequest):
 
 # --- Session Search Endpoints ---
 @app.get("/v1/sessions/search")
-async def search_sessions(query: str, session_id: Optional[str] = None, limit: int = 20):
+async def search_sessions(query: str, session_id: Optional[str] = None, limit: int = 20, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"results": get_state_db().search_sessions(query, session_id=session_id, limit=limit)}
 
 
@@ -825,13 +854,15 @@ class SessionRenameRequest(BaseModel):
 
 
 @app.get("/v1/sessions")
-async def list_sessions(limit: int = 50):
+async def list_sessions(limit: int = 50, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     """Chat session summaries for the sidebar (no fabricated rows)."""
     return {"sessions": get_state_db().list_sessions(limit=limit)}
 
 
 @app.put("/v1/sessions/{session_id}")
-async def rename_session(session_id: str, req: SessionRenameRequest):
+async def rename_session(session_id: str, req: SessionRenameRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     try:
         ok = get_state_db().rename_session(session_id, req.title)
     except ValueError as exc:
@@ -842,7 +873,8 @@ async def rename_session(session_id: str, req: SessionRenameRequest):
 
 
 @app.delete("/v1/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     ok = get_state_db().delete_session(session_id)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -850,7 +882,8 @@ async def delete_session(session_id: str):
 
 
 @app.get("/v1/sessions/{session_id}")
-async def get_session_detail(session_id: str, limit: int = 100):
+async def get_session_detail(session_id: str, limit: int = 100, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"messages": get_state_db().get_session_messages(session_id, limit=limit)}
 
 
@@ -923,12 +956,14 @@ class CronToggleRequest(BaseModel):
 
 
 @app.get("/v1/cron/jobs")
-async def get_cron_jobs():
+async def get_cron_jobs(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return {"jobs": get_cron_manager().list_jobs()}
 
 
 @app.post("/v1/cron/jobs")
-async def post_cron_job(req: CronCreateRequest):
+async def post_cron_job(req: CronCreateRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     try:
         job = get_cron_manager().create_job(
             name=req.name,
@@ -942,13 +977,15 @@ async def post_cron_job(req: CronCreateRequest):
 
 
 @app.post("/v1/cron/jobs/{job_id}/toggle")
-async def post_cron_toggle(job_id: str, req: CronToggleRequest):
+async def post_cron_toggle(job_id: str, req: CronToggleRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     ok = get_cron_manager().toggle_job(job_id, req.enabled)
     return {"ok": ok}
 
 
 @app.delete("/v1/cron/jobs/{job_id}")
-async def delete_cron_job(job_id: str):
+async def delete_cron_job(job_id: str, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     ok = get_cron_manager().delete_job(job_id)
     return {"ok": ok}
 
@@ -981,7 +1018,8 @@ class CompressRequest(BaseModel):
 
 
 @app.post("/v1/chat/compress")
-async def post_chat_compress(req: CompressRequest):
+async def post_chat_compress(req: CompressRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     compressor = ContextCompressor()
     res = compressor.compress_messages(req.messages, context_limit=req.context_limit or 128000, force=req.force or False)
     return res
@@ -994,12 +1032,14 @@ class DelegationConfigRequest(BaseModel):
 
 
 @app.get("/v1/delegation/config")
-async def get_delegation_cfg():
+async def get_delegation_cfg(authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return get_delegation_manager().get_config()
 
 
 @app.post("/v1/delegation/config")
-async def post_delegation_cfg(req: DelegationConfigRequest):
+async def post_delegation_cfg(req: DelegationConfigRequest, authorization: Optional[str] = Header(None)):
+    verify_bearer_token(authorization)
     return get_delegation_manager().update_config(req.enabled, req.max_parallel)
 
 

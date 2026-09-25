@@ -3566,6 +3566,7 @@ dependencies = [
  "base64 0.22.1",
  "cpal",
  "enigo",
+ "getrandom 0.2.17",
  "hound",
  "image",
  "keyring",

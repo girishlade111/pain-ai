@@ -171,8 +171,10 @@ export function sanitizeErrorMessage(msg: string): string {
   return msg
     .replace(/(sk-[a-zA-Z0-9_-]{8,})/gi, '[REDACTED_API_KEY]')
     .replace(/(ghp_[a-zA-Z0-9]{10,})/gi, '[REDACTED_TOKEN]')
-    .replace(/(xoxb-[a-zA-Z0-9_-]{10,})/gi, '[REDACTED_TOKEN]')
-    .replace(/(AIza[0-9A-Za-z_-]{10,})/gi, '[REDACTED_KEY]');
+    .replace(/(gho_[a-zA-Z0-9]{10,})/gi, '[REDACTED_TOKEN]')
+    .replace(/(xox[bap]-[a-zA-Z0-9_-]{10,})/gi, '[REDACTED_TOKEN]')
+    .replace(/(AIza[0-9A-Za-z_-]{10,})/gi, '[REDACTED_KEY]')
+    .replace(/(Bearer\s+[a-zA-Z0-9._~+/-]{8,})/gi, 'Bearer [REDACTED]');
 }
 
 // In-memory / localStorage fallback store for browser mode
