@@ -53,7 +53,11 @@ pub struct SttResult {
 }
 
 fn get_app_data_audio_dir() -> PathBuf {
-    let base = if let Ok(hermes_home) = std::env::var("HERMES_HOME") {
+    // P13: PAIN_AI_HOME first so unit tests (IsolatedHome) never touch the
+    // operator's live ~/.pain-ai/audio. Mirrors gate::get_appdata_dir.
+    let base = if let Ok(home) = std::env::var("PAIN_AI_HOME") {
+        PathBuf::from(home)
+    } else if let Ok(hermes_home) = std::env::var("HERMES_HOME") {
         PathBuf::from(hermes_home)
     } else if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
         PathBuf::from(home).join(".pain-ai")

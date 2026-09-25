@@ -188,7 +188,7 @@ impl SidecarManager {
 
     /// Engine log directory (`~/.pain-ai/logs/`), for doctor/support use.
     pub fn engine_logs_dir() -> Option<PathBuf> {
-        dirs_home().map(|h| h.join(".pain-ai").join("logs"))
+        state_home().map(|h| h.join("logs"))
     }
 
     /// Phase 12: bundled-engine target triple for this build.
@@ -393,8 +393,8 @@ impl SidecarManager {
         // stdout/stderr append to ~/.pain-ai/logs/ (operator-visible, used by
         // support/doctor). A >5MB log truncates on open (cheap rotation).
         cmd.stdin(std::process::Stdio::null());
-        if let Some(home) = dirs_home() {
-            let logs_dir = home.join(".pain-ai").join("logs");
+        if let Some(home) = state_home() {
+            let logs_dir = home.join("logs");
             let _ = std::fs::create_dir_all(&logs_dir);
             cmd.stdout(Self::log_file(&logs_dir, "engine-stdout.log"));
             cmd.stderr(Self::log_file(&logs_dir, "engine-stderr.log"));
@@ -410,8 +410,7 @@ impl SidecarManager {
         cmd.env("HERMES_TERMINAL_BACKEND", "local");
 
         // Pain AI Home (~/.pain-ai)
-        if let Some(home) = dirs_home() {
-            let pain_home = home.join(".pain-ai");
+        if let Some(pain_home) = state_home() {
             let _ = std::fs::create_dir_all(&pain_home);
             cmd.env("HERMES_HOME", pain_home.to_string_lossy().to_string());
         }
@@ -538,6 +537,17 @@ fn dirs_home() -> Option<PathBuf> {
         .or_else(|_| env::var("HOME"))
         .ok()
         .map(PathBuf::from)
+}
+
+/// P13: shared state home honoring PAIN_AI_HOME (unit-test isolation).
+/// Unlike dirs_home (profile parent), this IS the .pain-ai equivalent dir.
+fn state_home() -> Option<PathBuf> {
+    if let Ok(home) = env::var("PAIN_AI_HOME") {
+        if !home.trim().is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    dirs_home().map(|h| h.join(".pain-ai"))
 }
 
 // Global instance wrapped in Mutex

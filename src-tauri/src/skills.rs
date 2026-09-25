@@ -127,6 +127,11 @@ pub struct LearnDraftDto {
 }
 
 fn get_pain_ai_home() -> PathBuf {
+    // P13: PAIN_AI_HOME first so unit tests (IsolatedHome) never touch the
+    // operator's live ~/.pain-ai. Mirrors gate::get_appdata_dir.
+    if let Ok(home) = std::env::var("PAIN_AI_HOME") {
+        return PathBuf::from(home);
+    }
     if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
         PathBuf::from(home).join(".pain-ai")
     } else {

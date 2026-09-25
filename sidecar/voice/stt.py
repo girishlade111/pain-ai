@@ -26,9 +26,33 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("stt")
 
+def _resolve_home() -> Path:
+    """P13: home resolved per call (not frozen at import) so tests redirect
+    ALL state with PAIN_AI_HOME/HERMES_HOME and never touch the operator's
+    live ~/.pain-ai. Production behavior unchanged (env unset → ~/.pain-ai)."""
+    import os as _os
+    for key in ("PAIN_AI_HOME", "HERMES_HOME"):
+        val = _os.environ.get(key, "").strip()
+        if val:
+            return Path(val)
+    return Path.home() / ".pain-ai"
+
+
+def _stt_models_dir() -> Path:
+    d = _resolve_home() / "models" / "stt"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# Legacy module constants (import-time snapshot of the default home). Kept
+# for backward-compatible reads; model resolution goes through the dynamic
+# helper so env isolation is honored.
 PAIN_AI_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".pain-ai"))
 STT_MODELS_DIR = PAIN_AI_HOME / "models" / "stt"
-STT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    STT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 MODEL_CHOICES = ["large-v3-turbo-int8", "small", "base"]
 
@@ -149,7 +173,7 @@ def _transcribe_faster_whisper(wav_path: Path, model_size: str, device: str) -> 
                 model_size,
                 device=device,
                 compute_type=compute_type,
-                download_root=str(STT_MODELS_DIR)
+                download_root=str(_stt_models_dir())
             )
             _MODEL_CACHE[cache_key] = model
         segments, info = model.transcribe(str(wav_path), beam_size=5)
@@ -164,7 +188,7 @@ def _transcribe_faster_whisper(wav_path: Path, model_size: str, device: str) -> 
 def _transcribe_whisper_cpp(wav_path: Path, model_size: str) -> Optional[Tuple[str, str, int]]:
     """Transcribes audio using whisper.cpp CLI if available."""
     whisper_bin = os.environ.get("WHISPER_CPP_BIN") or shutil.which("whisper-cli") or shutil.which("whisper-cpp")
-    model_bin = STT_MODELS_DIR / f"ggml-{model_size}.bin"
+    model_bin = _stt_models_dir() / f"ggml-{model_size}.bin"
 
     if whisper_bin and model_bin.exists():
         try:

@@ -324,6 +324,27 @@ def verify_bearer_token(authorization: Optional[str] = Header(None)) -> None:
         )
 
 
+def _redact_error_text(text: str) -> str:
+    """Redact key material from error/diagnostic text before it leaves the
+    sidecar (SSE error cards, HTTP 500 details, log lines). The operator
+    sees WHAT failed, never the secret itself. Mirrors gate_policy
+    redaction + provider Bearer handling."""
+    try:
+        from gate_policy import redact_secrets as _redact
+    except ImportError:
+        try:
+            from sidecar.gate_policy import redact_secrets as _redact
+        except ImportError:
+            _redact = None  # type: ignore
+    out = str(text or "")
+    if _redact is not None:
+        out = _redact(out)
+    # Bearer scheme words surviving gate redaction (defensive second pass).
+    import re as _re
+    out = _re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1[REDACTED]", out)
+    return out
+
+
 # --- Hermes File & Shell Tool Schema Parity (P06) ---
 FILE_TOOL_SCHEMAS = [
     {
@@ -543,15 +564,21 @@ async def approve_action(req: ApproveRequest, authorization: Optional[str] = Hea
                    "Denied", req.comment or "deny")
 
     # Unblock the Hermes gateway wait with its REAL request id.
-    try:
-        resolve_gateway_approval(
-            session_key=session_key,
-            choice=choice,
-            reason=req.comment,
-            request_id=meta.get("hermes_request_id") or appr_id,
-        )
-    except Exception as e:
-        logger.warning(f"resolve_gateway_approval: {e}")
+    # Capability-bridge prompts (worker-thread gate) carry no Hermes
+    # request id — calling the gateway without one would pop the OLDEST
+    # unrelated Hermes wait (arbitrary resolution). Skip the gateway call
+    # entirely there; the thread_gate.set() above already unblocked it.
+    _hermes_request_id = meta.get("hermes_request_id")
+    if _hermes_request_id:
+        try:
+            resolve_gateway_approval(
+                session_key=session_key,
+                choice=choice,
+                reason=req.comment,
+                request_id=_hermes_request_id,
+            )
+        except Exception as e:
+            logger.warning(f"resolve_gateway_approval: {_redact_error_text(str(e))}")
 
     # Clean up pending entry
     pending_approvals.pop(appr_id, None)
@@ -785,8 +812,8 @@ async def voice_tts(req: TtsRequest, authorization: Optional[str] = Header(None)
     try:
         res = await loop.run_in_executor(None, speak, req.text, req.voice, req.engine)
     except Exception as exc:
-        logger.error(f"TTS failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}")
+        logger.error(f"TTS failed: {_redact_error_text(str(exc))}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"TTS failed: {_redact_error_text(str(exc))}")
     if not res.get("ok"):
         return JSONResponse(status_code=422, content=res)
     try:
@@ -794,7 +821,7 @@ async def voice_tts(req: TtsRequest, authorization: Optional[str] = Header(None)
             import base64
             wav_b64 = base64.b64encode(fh.read()).decode("ascii")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"TTS output unreadable: {exc}")
+        raise HTTPException(status_code=500, detail=f"TTS output unreadable: {_redact_error_text(str(exc))}")
     return {"ok": True, "wav_b64": wav_b64, "engine": res.get("engine"),
             "ms": res.get("ms"), "cached": res.get("cached", False)}
 
@@ -813,8 +840,8 @@ async def voice_transcribe(req: SttRequest, authorization: Optional[str] = Heade
     try:
         res = await loop.run_in_executor(None, transcribe, req.wav_path, req.model)
     except Exception as exc:
-        logger.error(f"STT failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"STT failed: {exc}")
+        logger.error(f"STT failed: {_redact_error_text(str(exc))}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"STT failed: {_redact_error_text(str(exc))}")
     if not res.get("ok"):
         return JSONResponse(status_code=422, content=res)
     return res
@@ -1003,8 +1030,8 @@ async def post_cron_run(job_id: str, authorization: Optional[str] = Header(None)
         record = await loop.run_in_executor(
             None, cron_run_job_now, job_id, _cron_agent_factory)
     except Exception as exc:
-        logger.error(f"cron run-now failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Cron execution failed: {exc}")
+        logger.error(f"cron run-now failed: {_redact_error_text(str(exc))}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cron execution failed: {_redact_error_text(str(exc))}")
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "record": record}
@@ -1116,7 +1143,7 @@ def install_capability_wrapper() -> None:
             )
             return outcome["result"]
         except Exception as exc:
-            logger.error(f"capability gate failure (fail-closed): {exc}", exc_info=True)
+            logger.error(f"capability gate failure (fail-closed): {_redact_error_text(str(exc))}", exc_info=True)
             try:
                 gate_audit({"kind": "ShellExec", "target": function_name,
                             "workspace": workspace, "app": None},
@@ -1213,14 +1240,17 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
         # 1. Already approved through the unified card? Auto-resolve silently.
         stashed = decision_stash.consume(session_id, "ShellExec", command)
         if stashed is not None:
-            try:
-                resolve_gateway_approval(
-                    session_key=session_id,
-                    choice=stashed["choice"],
-                    request_id=hermes_request_id or None,
-                )
-            except Exception as e:
-                logger.warning(f"stash auto-resolve: {e}")
+            if not hermes_request_id:
+                logger.warning("stash auto-resolve skipped: Hermes sent no request_id (refusing oldest-pop)")
+            else:
+                try:
+                    resolve_gateway_approval(
+                        session_key=session_id,
+                        choice=stashed["choice"],
+                        request_id=hermes_request_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"stash auto-resolve: {_redact_error_text(str(e))}")
             gate_audit({"kind": "ShellExec", "target": command,
                         "workspace": workspace, "app": None},
                        "AutoResolved", f"unified:{stashed['choice']}")
@@ -1231,14 +1261,17 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
                   "app": None, "workspace": workspace}
         verdict = gate_check(action)
         if verdict.get("type") == "deny_always":
-            try:
-                resolve_gateway_approval(
-                    session_key=session_id, choice="deny",
-                    reason=verdict.get("reason", "Denied by desktop security policy"),
-                    request_id=hermes_request_id or None,
-                )
-            except Exception as e:
-                logger.warning(f"policy auto-deny: {e}")
+            if not hermes_request_id:
+                logger.warning("policy auto-deny skipped: Hermes sent no request_id (refusing oldest-pop)")
+            else:
+                try:
+                    resolve_gateway_approval(
+                        session_key=session_id, choice="deny",
+                        reason=verdict.get("reason", "Denied by desktop security policy"),
+                        request_id=hermes_request_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"policy auto-deny: {_redact_error_text(str(e))}")
             return
 
         # 3. Genuine question → unified card (risk from the shared policy).
@@ -1293,10 +1326,10 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
             try:
                 output_path, output_source = output_resolve_dir(req.output_dir)
             except ValueError as exc:
-                logger.warning(f"output dir rejected: {exc}")
+                logger.warning(f"output dir rejected: {_redact_error_text(str(exc))}")
                 asyncio.run_coroutine_threadsafe(
                     queue.put({"type": "error",
-                               "message": f"Output directory unavailable: {exc}"}),
+                               "message": f"Output directory unavailable: {_redact_error_text(str(exc))}"}),
                     loop,
                 )
                 return
@@ -1398,9 +1431,9 @@ async def chat_endpoint(req: ChatRequest, authorization: Optional[str] = Header(
             )
 
         except Exception as exc:
-            logger.error(f"Error during agent turn: {exc}", exc_info=True)
+            logger.error(f"Error during agent turn: {_redact_error_text(str(exc))}", exc_info=True)
             asyncio.run_coroutine_threadsafe(
-                queue.put({"type": "error", "message": str(exc)}),
+                queue.put({"type": "error", "message": _redact_error_text(str(exc))}),
                 loop,
             )
         finally:

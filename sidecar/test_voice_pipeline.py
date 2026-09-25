@@ -27,7 +27,9 @@ def _expected_tts_engine() -> str:
     """Piper iff its voice model resolves in the effective models dir."""
     import os
 
-    home = Path(os.environ.get("HERMES_HOME", Path.home() / ".pain-ai"))
+    home = Path(os.environ.get("PAIN_AI_HOME", "").strip()
+                or os.environ.get("HERMES_HOME", "").strip()
+                or (Path.home() / ".pain-ai"))
     voice = tts_mod.DEFAULT_VOICE
     if (home / "models" / "piper" / f"{voice}.onnx").exists():
         return "piper"

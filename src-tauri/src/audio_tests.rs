@@ -1,4 +1,5 @@
 use super::*;
+use crate::gate::IsolatedHome;
 use std::fs;
 
 #[test]
@@ -13,6 +14,9 @@ fn test_stop_latency_under_500ms() {
 
 #[test]
 fn test_sentence_wav_generation() {
+    // P13: isolate audio output (generate_sentence_wav writes under the
+    // state home) so tests never touch live ~/.pain-ai/audio.
+    let _iso = IsolatedHome::new("audio_sentence");
     let wav_path = generate_sentence_wav("Unit test audio sentence.", None)
         .expect("Sentence WAV generation should succeed");
     assert!(wav_path.exists(), "Generated WAV file must exist on disk");
@@ -25,6 +29,7 @@ fn test_sentence_wav_generation() {
 
 #[test]
 fn test_hound_wav_spec_encoding() {
+    let _iso = IsolatedHome::new("audio_hound");
     let tmp_path = get_app_data_audio_dir().join("test_hound_spec.wav");
     let spec = WavSpec {
         channels: 1,
@@ -52,6 +57,7 @@ fn test_hound_wav_spec_encoding() {
 
 #[test]
 fn test_voice_record_lifecycle() {
+    let _iso = IsolatedHome::new("audio_record");
     let _ = voice_record_start();
     std::thread::sleep(Duration::from_millis(50));
     let res = voice_record_stop().expect("voice_record_stop should succeed");

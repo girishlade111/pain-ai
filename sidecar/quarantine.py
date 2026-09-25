@@ -14,11 +14,15 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Secret detection patterns
+# Secret detection patterns (P13: parity with gate redaction markers —
+# OpenAI/Anthropic, Slack workspace+bot+user, GitHub classic+fine-grained,
+# Google, plus generic Bearer echoes and PEM bodies).
 SECRET_PATTERNS = [
     ("api_key_openai_anthropic", re.compile(r"sk-[A-Za-z0-9_-]{16,}")),
-    ("slack_token", re.compile(r"xox[bap]-[A-Za-z0-9-]+")),
+    ("slack_token", re.compile(r"xox[bapox]-[A-Za-z0-9-]+")),
     ("github_token", re.compile(r"ghp_[A-Za-z0-9]{36}")),
+    ("github_oauth_token", re.compile(r"gho_[A-Za-z0-9]{36}")),
+    ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{22,}")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z-_]{35}")),
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 ]

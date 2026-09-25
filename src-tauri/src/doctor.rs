@@ -30,17 +30,6 @@ pub struct DoctorCheckResult {
     pub fix: Option<String>,
 }
 
-fn dirs_home() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("USERPROFILE").ok().map(PathBuf::from)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(PathBuf::from)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Check 1: Sidecar Health, Version, & SHA Match
 // ---------------------------------------------------------------------------
@@ -250,9 +239,9 @@ pub fn check_keychain_roundtrip() -> DoctorCheckResult {
 // ---------------------------------------------------------------------------
 
 pub fn check_rules_and_trust() -> DoctorCheckResult {
-    let rules_path = dirs_home()
-        .map(|h| h.join(".pain-ai").join("rules.json"))
-        .unwrap_or_else(|| PathBuf::from(".pain-ai/rules.json"));
+    // P13: single shared policy home (honors PAIN_AI_HOME) so unit tests
+    // (IsolatedHome) read the isolated rules.json, never the live one.
+    let rules_path = crate::gate::get_appdata_dir().join("rules.json");
 
     if rules_path.exists() {
         match fs::read_to_string(&rules_path) {
@@ -300,7 +289,7 @@ pub fn check_rules_and_trust() -> DoctorCheckResult {
         DoctorCheckResult {
             name: "Permission Rules & Trust Store".into(),
             status: DoctorStatus::Pass,
-            detail: "Default in-memory rule store active (deny > ask > allow precedence, 12 hardline blocklists enforced)".into(),
+                detail: "Default in-memory rule store active (deny > ask > allow precedence, hardline blocklists enforced)".into(),
             fix: None,
         }
     }

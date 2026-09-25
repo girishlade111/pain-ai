@@ -26,7 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 APPROVAL_TIMEOUT_SEC = 300
 
-# Canonical source: gate.rs BLOCKLIST_PATTERNS (18 entries). Lowercase substring.
+# Canonical source: gate.rs BLOCKLIST_PATTERNS. Lowercase substring matched
+# against normalize_command() output (never the raw string).
 BLOCKLIST_PATTERNS: List[Tuple[str, str]] = [
     ("rm -rf /", "recursive delete of root filesystem"),
     ("rm -rf /*", "recursive delete of root filesystem"),
@@ -46,9 +47,25 @@ BLOCKLIST_PATTERNS: List[Tuple[str, str]] = [
     (":(){ :|:& };:", "bash fork bomb"),
     ("kill -9 -1", "kill all system processes"),
     ("shutdown /s", "system shutdown command"),
+    # P13: abbreviation/obfuscation variants of the above families.
+    ("shutdown -s", "system shutdown command (flag form)"),
+    ("stop-computer", "PowerShell system shutdown"),
+    ("rd /s /q c:", "Windows system root recursive deletion (short form)"),
+    ("rd /s c:\\windows", "Windows directory recursive deletion (short form)"),
+    ("del /f /s /q c:", "Windows forced recursive file wipe"),
+    ("remove-item c:\\* -recurse", "PowerShell forced recursive deletion (unquoted)"),
+    ("format c: /q", "Windows disk drive quick format"),
+    ("reg delete hklm\\software", "Windows software registry hive delete"),
+    ("bcdedit", "Windows boot configuration tampering"),
+    ("vssadmin delete shadows", "Volume Shadow Copy destruction (ransomware pattern)"),
+    ("wbadmin delete", "Windows backup catalog destruction"),
+    ("wevtutil cl security", "Windows Security event log wipe"),
+    ("cipher /w:c", "Windows free-space wipe"),
+    ("sdelete", "Sysinternals secure deletion tool"),
 ]
 
-# Canonical source: gate.rs DANGEROUS_PATTERNS (21 entries). Lowercase substring.
+# Canonical source: gate.rs DANGEROUS_PATTERNS. Lowercase substring matched
+# against normalize_command() output (never the raw string).
 DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
     ("chmod -r 777", "insecure recursive world permissions"),
     ("chown -r", "recursive system ownership change"),
@@ -65,15 +82,42 @@ DANGEROUS_PATTERNS: List[Tuple[str, str]] = [
     ("curl | bash", "remote unverified script piping to bash"),
     ("wget | sh", "remote unverified script piping to shell"),
     ("wget | bash", "remote unverified script piping to bash"),
+    # P13: pipe forms with a URL between fetcher and shell (the literal
+    # above only matches adjacent tokens, missing `curl <url> | sh`).
+    ("| sh", "piping into shell"),
+    ("| bash", "piping into bash"),
+    ("| powershell", "piping into PowerShell"),
+    ("| cmd", "piping into cmd"),
     ("nc -e", "netcat executable reverse shell"),
     ("bash -i >& /dev/tcp", "bash interactive reverse shell"),
     ("git reset --hard", "destructive git working tree reset"),
     ("git clean -fdx", "destructive git untracked file purge"),
     ("git push --force", "destructive remote git branch rewrite"),
     ("taskkill /f /im *", "forced mass task termination"),
+    # P13: download cradles + encoded payloads (decoded by normalize_command).
+    ("invoke-expression", "PowerShell dynamic code execution"),
+    ("iex(", "PowerShell Invoke-Expression alias"),
+    ("downloadstring", "remote payload download cradle"),
+    ("downloadfile", "remote payload download to disk"),
+    ("frombase64string", "base64-encoded payload decode"),
+    ("encodedcommand", "PowerShell encoded command blob"),
+    (" -enc ", "PowerShell abbreviated encoded-command flag"),
+    (" -ec ", "PowerShell abbreviated encoded-command flag"),
+    ("mimikatz", "credential dumping tool"),
+    ("sekurlsa", "LSASS credential access (Mimikatz module)"),
+    ("psexec", "remote process execution tool"),
+    ("wmic process call create", "WMI remote process creation"),
+    ("schtasks /create", "scheduled task persistence"),
+    ("reg add hklm\\software\\microsoft\\windows\\currentversion\\run", "registry run-key persistence"),
+    ("new-service", "Windows service installation (persistence)"),
+    ("sc create", "Windows service creation (persistence)"),
 ]
 
-_SECRET_MARKERS = ("sk-", "ghp_", "gho_", "xoxb-", "xoxa-", "xoxp-", "AIza")
+_SECRET_MARKERS = ("sk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxa-",
+                   "xoxp-", "xoxo-", "AIza")
+_SECRET_SCHEME_MARKERS = ("Bearer ", "bearer ")
+_SAVE_SECRET_MARKERS = ("sk-", "ghp_", "gho_", "github_pat_", "xoxb-",
+                        "xoxa-", "xoxp-", "xoxo-", "AIza", "PRIVATE KEY")
 _PEM_BEGIN = "-----BEGIN"
 _PEM_END = "-----END"
 
@@ -125,7 +169,7 @@ def save_rules(store: Dict[str, Any], home: Optional[Path] = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # SECURITY: the policy store must never carry key material.
     blob = json.dumps(store)
-    for marker in ("sk-", "ghp_", "xoxb-", "AIza", "PRIVATE KEY"):
+    for marker in _SAVE_SECRET_MARKERS:
         if marker in blob:
             raise ValueError("policy store must never contain key material")
     path.write_text(json.dumps(store, indent=2), encoding="utf-8")
@@ -137,9 +181,25 @@ def redact_secrets(text: str) -> str:
         start = out.find(marker)
         while start != -1:
             end = start + len(marker)
-            while end < len(out) and (out[end].isalnum() or out[end] in "_-"):
+            while end < len(out) and (out[end].isalnum() or out[end] in "_-."):
                 end += 1
+            # Never redact the whole message when nothing follows the marker.
+            if end == start + len(marker):
+                break
             out = out[:start] + "[REDACTED]" + out[end:]
+            start = out.find(marker)
+    # Scheme words ("Bearer ") are not secret — keep the label so
+    # diagnostics stay readable while the credential is dropped.
+    for marker in _SECRET_SCHEME_MARKERS:
+        start = out.find(marker)
+        while start != -1:
+            scan_from = start + len(marker)
+            end = scan_from
+            while end < len(out) and (out[end].isalnum() or out[end] in "_-.~/+"):
+                end += 1
+            if end == scan_from:
+                break
+            out = out[:scan_from] + "[REDACTED]" + out[end:]
             start = out.find(marker)
     begin = out.find(_PEM_BEGIN)
     while begin != -1:
@@ -192,18 +252,99 @@ def rule_matches(rule: Dict[str, Any], action: Dict[str, Any]) -> bool:
     return pattern_matches(str(rule.get("pattern", "")), str(action.get("target", "")))
 
 
+def _b64_decode(blob: str) -> Optional[bytes]:
+    """Minimal base64 decoder (stdlib only). Returns None on bad input."""
+    import base64 as _b64
+
+    clean = "".join(blob.split())
+    if len(clean) < 8 or len(clean) % 4 != 0:
+        return None
+    try:
+        return _b64.b64decode(clean, validate=True)
+    except Exception:
+        return None
+
+
+def _try_b64_decode(blob: str) -> Optional[str]:
+    decoded = _b64_decode(blob)
+    if not decoded:
+        return None
+    # PowerShell -EncodedCommand is UTF-16LE; also try UTF-8.
+    # Filter mirrors gate.rs: drop control chars except \n and \t.
+    if len(decoded) >= 2:
+        try:
+            text = decoded.decode("utf-16-le")
+            trimmed = "".join(c for c in text if not _is_control(c) or c in "\n\t")
+            if trimmed.strip():
+                return trimmed.lower()
+        except Exception:
+            pass
+    try:
+        return decoded.decode("utf-8").lower()
+    except Exception:
+        return None
+
+
+def _is_control(ch: str) -> bool:
+    import unicodedata as _ud
+    return _ud.category(ch) == "Cc"
+
+
+def _decode_encoded_command_args(command: str) -> List[str]:
+    """Extract + base64-decode -EncodedCommand/-enc/-ec payloads and inline
+    frombase64string('...') cradles. Mirrors gate.rs (case-insensitive flags,
+    original-case blobs). Undecodable tokens are skipped."""
+    out: List[str] = []
+    tokens = (command or "").split()
+    i = 0
+    while i < len(tokens):
+        if tokens[i].lower() in ("-encodedcommand", "-enc", "-ec",
+                                 "/encodedcommand", "/enc", "/ec"):
+            if i + 1 < len(tokens):
+                decoded = _try_b64_decode(tokens[i + 1])
+                if decoded:
+                    out.append(decoded)
+            i += 2
+            continue
+        low = tokens[i].lower()
+        marker = "frombase64string("
+        at = low.find(marker)
+        if at != -1:
+            rest = tokens[i][at + len(marker):]
+            blob = "".join(c for c in rest if c.isalnum() or c in "+/=")
+            if len(blob) >= 8:
+                decoded = _try_b64_decode(blob)
+                if decoded:
+                    out.append(decoded)
+        i += 1
+    return out
+
+
+def normalize_command(command: str) -> str:
+    """Mirror of gate.rs normalize_command: lowercase + collapse whitespace,
+    strip quote/caret/backtick smuggling chars, and append decoded
+    -EncodedCommand payloads so blocklist patterns match THROUGH encoding."""
+    decoded_parts = _decode_encoded_command_args(command or "")
+    norm = " ".join((command or "").lower().split())
+    norm = "".join(c for c in norm if c not in "'\"`^")
+    norm = " ".join(norm.split())
+    for decoded in decoded_parts:
+        norm += " " + decoded.lower()
+    return norm
+
+
 def check_blocklist(command: str) -> Optional[str]:
-    lower = (command or "").lower()
+    norm = normalize_command(command or "")
     for pat, reason in BLOCKLIST_PATTERNS:
-        if pat in lower:
+        if pat in norm:
             return reason
     return None
 
 
 def check_dangerous(command: str) -> Optional[str]:
-    lower = (command or "").lower()
+    norm = normalize_command(command or "")
     for pat, desc in DANGEROUS_PATTERNS:
-        if pat in lower:
+        if pat in norm:
             return desc
     return None
 
@@ -268,13 +409,18 @@ def check(action: Dict[str, Any], store: Optional[Dict[str, Any]] = None) -> Dic
         return {"type": "deny_always", "reason": f"Hardline blocklist violation: {reason}"}
 
     # 2. Deny rules (global + workspace deny: entries).
+    # The "deny:" prefix must be STRIPPED before matching — otherwise no
+    # workspace deny rule can ever match (dead enforcement; mirrors gate.rs).
     denied = any(rule_matches(r, action) for r in store.get("deny", []))
     if not denied:
         ws_rules = (store.get("workspace", {}) or {}).get(action.get("workspace", ""), [])
-        denied = any(
-            r.get("pattern", "").startswith("deny:") and rule_matches(r, action)
+        stripped = [
+            {"kind": r.get("kind"),
+             "pattern": str(r.get("pattern", ""))[len("deny:"):]}
             for r in ws_rules
-        )
+            if str(r.get("pattern", "")).startswith("deny:")
+        ]
+        denied = any(rule_matches(r, action) for r in stripped)
     if denied:
         append_audit_log(action, "Deny", "Matched persistent deny rule")
         return {"type": "deny_always", "reason": "Action denied by saved security policy"}
@@ -311,7 +457,10 @@ def persist_allow(kind: str, target: str, workspace: Optional[str],
             f"{kind} cannot be granted persistent Always permissions in v1"
         )
     store = load_rules(home)
-    rule = {"kind": kind, "pattern": target}
+    # Never persist raw secrets into rules.json (e.g. a curl command
+    # carrying a Bearer key). Redacted patterns fail to match rotated keys
+    # → fail-closed re-prompt, never silent allow. Mirrors gate.rs.
+    rule = {"kind": kind, "pattern": redact_secrets(target)}
     if scope == "workspace":
         if not workspace:
             raise ValueError("workspace scope requires a workspace name")

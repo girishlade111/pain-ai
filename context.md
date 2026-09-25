@@ -169,3 +169,9 @@ git push origin v1.0.0
 - Hygiene: config persist refuses key material in ALL profiles; URLs with userinfo rejected; error redaction widened; MCP `.env` owner-only (0600/Windows DACL); Connectors key cleared post-save.
 - Isolation: Rust IsolatedHome (PAIN_AI_HOME per test + shared lock) across gate/uia/atspi/capture/context/doctor/commands tests; Python skills home dynamic + hub-test setUp/tearDown + bridge-test autouse fixture (fixed voice-model starvation via collection-time env discipline).
 - Tests: Rust 140/140 · Python 119+1skip (venv) · tsc 0 · vite clean. No critical regressions; with-model live turns still need BYOK creds.
+
+## P13 Follow-up Hardening (2026-09-25 — sidecar parity + isolation gaps, NO critical regressions)
+- Parity: gate_policy.py was stale (18/21 patterns, raw-lowercase match, dead deny: strip, unredacted grants) → synced to gate.rs (32 blocklist + 41 dangerous, normalize_command with -EncodedCommand b64 decode, deny: strip, redacted persist, widened markers) + 8 new parity tests.
+- Approvals: bridge gateway auto-resolve paths now refuse empty Hermes request_id (never oldest-pop); capability-bridge approvals skip the gateway call (thread gate already unblocked); all SSE/HTTP-500/log error text redacted via _redact_error_text.
+- Isolation: audio/skills/sidecar home resolvers now honor PAIN_AI_HOME; doctor rules check reads shared policy home (was live-only); audio_tests hold IsolatedHome; voice tts/stt use per-call home resolution (cache/models never frozen to live); quarantine secrets widened (gho_/github_pat_/xoxo-xoxp).
+- Proof: Python 85+28+7 passed/1 skipped · tsc 0 · vite clean · cargo check 0 new warnings (1 pre-existing ChibiRect); Rust test binaries unexecutable on this box (Smart App Control os error 4551, known P01 limit — parity tests cover the logic). Secrets grep: test fixtures only. Bypass grep: 0.

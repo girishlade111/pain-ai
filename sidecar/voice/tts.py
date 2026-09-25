@@ -27,11 +27,43 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("tts")
 
+def _resolve_home() -> Path:
+    """P13: home resolved per call (not frozen at import) so tests redirect
+    ALL state with PAIN_AI_HOME/HERMES_HOME and never touch the operator's
+    live ~/.pain-ai. Production behavior unchanged (env unset → ~/.pain-ai)."""
+    for key in ("PAIN_AI_HOME", "HERMES_HOME"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return Path(val)
+    return Path.home() / ".pain-ai"
+
+
+def _tts_cache_dir() -> Path:
+    d = _resolve_home() / "cache" / "tts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _models_dir() -> Path:
+    d = _resolve_home() / "models" / "piper"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# Legacy module constants (import-time snapshot of the default home). Kept
+# for backward-compatible reads; speak()/piper synthesis go through the
+# dynamic helpers above so env isolation is honored.
 PAIN_AI_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".pain-ai"))
 TTS_CACHE_DIR = PAIN_AI_HOME / "cache" / "tts"
-TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 MODELS_DIR = PAIN_AI_HOME / "models" / "piper"
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 DEFAULT_VOICE = "en_US-lessac-medium"
 
@@ -85,7 +117,7 @@ def _synthesize_offline_wave(text: str, output_path: Path) -> int:
 def _generate_piper_tts(text: str, voice: str, output_path: Path) -> Optional[int]:
     """Attempts local Piper synthesis if piper binary or package is available."""
     piper_bin = os.environ.get("PIPER_BIN") or shutil.which("piper")
-    model_onnx = MODELS_DIR / f"{voice}.onnx"
+    model_onnx = _models_dir() / f"{voice}.onnx"
 
     if piper_bin and model_onnx.exists():
         start_time = time.time()
@@ -196,7 +228,7 @@ def speak(
     # Content-addressed cache lookup. Phase 11: the producing engine is part
     # of the key — a fallback tone must never be served back as Piper speech.
     cache_key = hashlib.sha256(f"{clean_text}:{active_voice}:{active_engine}".encode("utf-8")).hexdigest()
-    output_wav = TTS_CACHE_DIR / f"tts_{cache_key[:16]}_{active_engine}.wav"
+    output_wav = _tts_cache_dir() / f"tts_{cache_key[:16]}_{active_engine}.wav"
 
     if output_wav.exists() and output_wav.stat().st_size > 44:
         return {
